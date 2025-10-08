@@ -1,0 +1,78 @@
+import asyncio
+import time
+from typing import Any, Callable, Dict, Tuple
+from aiogram import BaseMiddleware
+
+
+class RateLimitMiddleware(BaseMiddleware):
+    def __init__(self, default_limit: float = 1.5, custom_limits: Dict[str, float] | None = None):
+        super().__init__()
+        self.default_limit = default_limit
+        self.custom_limits = custom_limits or {}
+        self.last_time: Dict[Tuple[int, str], float] = {}
+        self._lock = asyncio.Lock()
+
+    def _get_key(self, event: Any) -> str:
+        text = getattr(event, "text", None)
+        if isinstance(text, str) and text.startswith("/"):
+            return text.split()[0]
+        return event.__class__.__name__
+
+    async def __call__(self, handler: Callable, event: Any, data: dict):
+        user = getattr(event, "from_user", None)
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            return await handler(event, data)
+
+        key = self._get_key(event)
+        limit = self.custom_limits.get(key, self.default_limit)
+        now = time.monotonic()
+        lk = (user_id, key)
+
+        async with self._lock:
+            last = self.last_time.get(lk)
+            if last is not None and (now - last) < limit:
+                msg = None
+                try:
+                    t = data.get("t")
+                    msg = t("too_fast") if t else "⏳ Too fast"
+                except Exception:
+                    msg = "⏳ Too fast"
+
+                if hasattr(event, "answer") and "callback" in event.__class__.__name__.lower():
+                    try:
+                        await event.answer(msg, show_alert=False)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        m = await event.answer(msg)
+                        asyncio.create_task(self._safe_delete(m, delay=2))
+                    except Exception:
+                        pass
+                return
+
+            self.last_time[lk] = now
+
+        return await handler(event, data)
+
+    @staticmethod
+    async def _safe_delete(message, delay: float = 2.0):
+        await asyncio.sleep(delay)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+
+async def cleanup_rate_limit(middleware: RateLimitMiddleware, interval: int = 3600, max_age: int = 3600):
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            cutoff = time.monotonic() - max_age
+            async with middleware._lock:
+                old_keys = [k for k, t in middleware.last_time.items() if t < cutoff]
+                for k in old_keys:
+                    middleware.last_time.pop(k, None)
+    except asyncio.CancelledError:
+        pass

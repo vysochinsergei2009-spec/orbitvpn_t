@@ -1,0 +1,18 @@
+{
+  "sub_1m": {
+    "days": 30,
+    "price": 190
+},
+  "sub_3m": {
+    "days": 90,
+    "price": 540
+},
+  "sub_6m": {
+    "days": 180, 
+    "price": 990
+},
+  "sub_12m": {
+    "days": 365, 
+    "price": 1890
+}
+}
