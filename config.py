@@ -8,6 +8,10 @@ load_dotenv()
 BOT_TOKEN=os.getenv('BOT_TOKEN')
 bot = Bot(token=BOT_TOKEN)
 
+IS_LOGGING = True
+LOG_LEVEL = "DEBUG"  ''' "INFO", "DEBUG", "ERROR" '''
+LOG_AIOGRAM = False
+
 # --- DATABASE ---
 DATABASE_USER=os.getenv('DATABASE_USER')
 DATABASE_PASSWORD=os.getenv('DATABASE_PASSWORD')
@@ -28,10 +32,6 @@ TON_ADDRESS=os.getenv('TON_ADDRESS')
 TONAPI_URL=os.getenv('TONAPI_URL')
 TONAPI_KEY=os.getenv('TONAPI_KEY')
 TON_EXPLORER_TX_URL = f"https://tonviewer.com/{TON_ADDRESS}"
-
-# --- YOOKASSA ---
-YOOKASSA_SHOP_ID = os.getenv('YOOKASSA_SHOP_ID')
-YOOKASSA_SECRET_KEY = os.getenv('YOOKASSA_SECRET_KEY')
 
 # --- CRYPTOBOT ---
 CRYPTOBOT_TOKEN = os.getenv('CRYPTOPAY_TOKEN')

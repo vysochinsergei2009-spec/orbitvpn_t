@@ -14,10 +14,11 @@ from app.client import (
     marzban_modify_user,
 )
 from .base import BaseRepository
+from app.utils.logging import get_logger
 
 from config import REFERRAL_BONUS, REDIS_TTL
 
-LOG = logging.getLogger(__name__)
+LOG = get_logger(__name__)
 
 CACHE_TTL_CONFIGS = REDIS_TTL
 CACHE_TTL_SUB_END = REDIS_TTL

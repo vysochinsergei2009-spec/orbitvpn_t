@@ -2,6 +2,7 @@ import logging
 import uuid
 from decimal import Decimal
 from typing import Optional
+import asyncio
 
 from app.payments.models import PaymentResult, PaymentMethod
 from app.payments.gateway.base import BasePaymentGateway
@@ -9,9 +10,10 @@ from app.payments.gateway.ton import TonGateway
 from app.payments.gateway.stars import TelegramStarsGateway
 from app.repo.payments import PaymentRepository
 from app.repo.user import UserRepository
-
+from config import TON_ADDRESS
 
 LOG = logging.getLogger(__name__)
+
 
 class PaymentManager:
     def __init__(self):
@@ -35,7 +37,6 @@ class PaymentManager:
         try:
             currency = "RUB"
 
-            comment = None
             if method == PaymentMethod.TON:
                 comment = uuid.uuid4().hex[:10]
 
@@ -57,8 +58,16 @@ class PaymentManager:
                 comment=comment
             )
 
+            # Для TON сразу обновляем транзакции в фоне
+            if method == PaymentMethod.TON:
+                from app.utils.txns_updater import TonTransactionsUpdater
+                updater = TonTransactionsUpdater(TON_ADDRESS)
+                # Запускаем однократное обновление транзакций в фоне
+                asyncio.create_task(updater.run_once())
+
             LOG.info(f"Payment created: {method} for user {tg_id}, amount {amount}, id={payment_id}")
             return result
+
         except Exception as e:
             LOG.exception(f"Create payment error: {e}")
             raise
@@ -68,13 +77,13 @@ class PaymentManager:
             payment = await self.payment_repo.get_payment(payment_id)
             if not payment:
                 return False
-            
+
             gateway = self.gateways[PaymentMethod(payment['method'])]
             confirmed = await gateway.check_payment(payment_id)
-            
+
             if confirmed:
                 await self.confirm_payment(payment_id, payment['tg_id'], payment['amount'])
-            
+
             return confirmed
         except Exception as e:
             LOG.error(f"Check payment error: {e}")

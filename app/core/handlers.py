@@ -1,4 +1,3 @@
-import logging
 from datetime import datetime
 from decimal import Decimal
 
@@ -27,11 +26,12 @@ from app.repo.payments import PaymentRepository
 from app.payments.models import PaymentMethod
 from app.payments.manager import PaymentManager
 from app.utils.rates import get_ton_price
+from app.utils.logging import get_logger
 
 from config import FREE_TRIAL_DAYS, TELEGRAM_STARS_RATE, TON_RUB_RATE
 
 router = Router()
-LOG = logging.getLogger(__name__)
+LOG = get_logger(__name__)
 
 class PaymentState(StatesGroup):
     waiting_amount = State()
@@ -111,7 +111,7 @@ async def add_config_callback(callback: CallbackQuery, t):
             await callback.answer(t('error_creating_config'), show_alert=True)
 
     except Exception as e:
-        logging.error(e)
+        LOG.error(e)
         await callback.answer(t('error_creating_config'), show_alert=True)
 
 
@@ -252,7 +252,7 @@ async def payment_method_callback(callback: CallbackQuery, t, state: FSMContext)
 async def process_amount(message: Message, state: FSMContext, t):
     try:
         amount = Decimal(message.text)
-        if amount < 200:
+        if amount < 2:
             raise ValueError
     except (ValueError, Exception):
         await message.answer(t('invalid_amount'))

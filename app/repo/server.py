@@ -1,13 +1,13 @@
 import json
-import logging
 from datetime import datetime
 from typing import Optional, Dict
 
 from .base import BaseRepository
+from app.utils.logging import get_logger
 
 CACHE_TTL_SERVERS = 120
 
-LOG = logging.getLogger(__name__)
+LOG = get_logger(__name__)
 
 class ServerRepository(BaseRepository):
     

@@ -1,10 +1,10 @@
 from decimal import Decimal
 from typing import Optional, List, Dict
-import logging
+from app.utils.logging import get_logger
 from .base import BaseRepository
 from app.payments.models import PaymentMethod
 
-LOG = logging.getLogger(__name__)
+LOG = get_logger(__name__)
 
 class PaymentRepository(BaseRepository):
     
