@@ -1,66 +1,81 @@
 import json
 from datetime import datetime
-from typing import Optional, Dict
-
-from .base import BaseRepository
+from decimal import Decimal
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import update
+from .models import Server
+from .db import get_session
 from app.utils.logging import get_logger
-
-CACHE_TTL_SERVERS = 120
+import redis.asyncio as redis  # Явный импорт redis
 
 LOG = get_logger(__name__)
+CACHE_TTL_SERVERS = 120
 
-class ServerRepository(BaseRepository):
-    
-    async def get_best(self) -> Optional[Dict]:
-        redis = await self._get_redis()
-        pool = await self._get_pool()
-        
+class ServerRepository:
+    def __init__(self, redis):
+        self.redis = redis
+
+    async def _server_to_dict(self, server: Server) -> dict:
+        server_dict = {c.name: getattr(server, c.name) for c in Server.__table__.columns}
+        for key, value in server_dict.items():
+            if isinstance(value, Decimal):
+                server_dict[key] = float(value)  # Decimal в float
+            elif isinstance(value, datetime):
+                server_dict[key] = value.isoformat()  # datetime в ISO строку
+            elif value is None:
+                server_dict[key] = None
+        return server_dict
+
+    async def get_best(self) -> dict | None:
         key = "servers:best"
-        cached = await redis.get(key)
-        if cached:
-            return json.loads(cached)
-        
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """SELECT * FROM servers 
-                   WHERE load_avg < 75 
-                   ORDER BY load_avg ASC, updated_at DESC 
-                   LIMIT 1"""
-            )
-            if not row:
-                row = await conn.fetchrow(
-                    "SELECT * FROM servers ORDER BY load_avg ASC, updated_at DESC LIMIT 1"
-                )
-            
-            if not row:
-                LOG.warning("No servers available in database")
-                return None
-            
-            server = dict(row)
-            if 'updated_at' in server and isinstance(server['updated_at'], datetime):
-                server['updated_at'] = server['updated_at'].isoformat()
-        
-        await redis.setex(key, CACHE_TTL_SERVERS, json.dumps(server))
-        return server
+        try:
+            cached = await self.redis.get(key)
+            if cached:
+                return json.loads(cached)
+        except redis.RedisError as e:
+            LOG.error(f"Redis error in get_best: {e}")
 
-    async def increment_users(self, server_id: str):
-        redis = await self._get_redis()
-        pool = await self._get_pool()
-        
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE servers SET users_count = users_count + 1 WHERE id=$1",
-                server_id
-            )
-        await redis.delete("servers:best")
+        async with get_session() as session:
+            stmt = select(Server).order_by(Server.load_avg.asc(), Server.updated_at.desc()).limit(1)
+            result = await session.execute(stmt)
+            server = result.scalar_one_or_none()
+
+            if server is None:
+                LOG.warning("No servers available")
+                return None
+
+            server_dict = await self._server_to_dict(server)
+            try:
+                await self.redis.setex(key, CACHE_TTL_SERVERS, json.dumps(server_dict))
+            except redis.RedisError as e:
+                LOG.error(f"Redis error in setex: {e}")
+            return server_dict
+
+    async def increment_users(self, server_id: str):  # Изменено на str
+        async with get_session() as session:
+            async with session.begin():
+                stmt = (
+                    update(Server)
+                    .where(Server.id == server_id)
+                    .values(users_count=Server.users_count + 1)
+                )
+                await session.execute(stmt)
+            try:
+                await self.redis.delete("servers:best")
+            except redis.RedisError as e:
+                LOG.error(f"Redis error in increment_users: {e}")
 
     async def decrement_users(self, server_id: str):
-        redis = await self._get_redis()
-        pool = await self._get_pool()
-        
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE servers SET users_count = users_count - 1 WHERE id=$1 AND users_count > 0",
-                server_id
-            )
-        await redis.delete("servers:best")
+        async with get_session() as session:
+            async with session.begin():
+                stmt = (
+                    update(Server)
+                    .where(Server.id == server_id, Server.users_count > 0)
+                    .values(users_count=Server.users_count - 1)
+                )
+                await session.execute(stmt)
+            try:
+                await self.redis.delete("servers:best")
+            except redis.RedisError as e:
+                LOG.error(f"Redis error in decrement_users: {e}")

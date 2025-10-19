@@ -2,20 +2,17 @@ import asyncio
 from aiogram import Dispatcher
 from app.core.handlers import router
 from app.locales.locales_mw import LocaleMiddleware
-from app.utils.db import init_db, close_db
 from app.utils.redis import init_cache, close_cache
 from app.utils.rate_limit import RateLimitMiddleware, cleanup_rate_limit
 from app.utils.logging import get_logger, setup_aiogram_logger
-from app.payments.watcher import PaymentWatcher
+from app.repo.db import close_db
 from config import bot
 
 LOG = get_logger(__name__)
 
-
 async def main():
     setup_aiogram_logger()
 
-    await init_db()
     await init_cache()
 
     dp = Dispatcher()
@@ -24,11 +21,19 @@ async def main():
     dp.message.middleware(LocaleMiddleware())
     dp.callback_query.middleware(LocaleMiddleware())
 
-    watcher = PaymentWatcher(interval=60)
-
     limiter = RateLimitMiddleware(
         default_limit=0.8,
-        custom_limits={'/start': 3.0},
+        custom_limits={
+            '/start': 3.0,
+            'add_funds': 5.0,  # Payment creation
+            'pm_ton': 10.0,  # TON payment method selection
+            'pm_stars': 10.0,  # Stars payment method selection
+            'buy_sub': 3.0,  # Subscription purchase
+            'sub_1m': 2.0,  # Individual subscription plans
+            'sub_3m': 2.0,
+            'sub_6m': 2.0,
+            'sub_12m': 2.0,
+        },
     )
     dp.message.middleware(limiter)
     dp.callback_query.middleware(limiter)
@@ -40,17 +45,16 @@ async def main():
     LOG.info("Bot started...")
 
     try:
-        await watcher.start()
         await dp.start_polling(bot)
     finally:
         cleanup_task.cancel()
         try:
-            await watcher.stop()
             await cleanup_task
         except asyncio.CancelledError:
             pass
+
         await bot.session.close()
-        await close_db()
+        await close_db()  # Close database connections
         await close_cache()
         LOG.info("Bot stopped cleanly")
 

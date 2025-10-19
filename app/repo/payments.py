@@ -1,117 +1,148 @@
 from decimal import Decimal
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union
+from datetime import datetime, timedelta
+
+from sqlalchemy import select, update, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.payments.models import PaymentMethod
+from app.repo.models import Payment as PaymentModel, TonTransaction
+from .db import get_session
 from app.utils.logging import get_logger
 from .base import BaseRepository
-from app.payments.models import PaymentMethod
+from config import PAYMENT_TIMEOUT_MINUTES
 
 LOG = get_logger(__name__)
 
+
 class PaymentRepository(BaseRepository):
-    
     async def create_payment(
-        self, 
-        tg_id: int, 
-        method: PaymentMethod,
-        amount: Decimal, 
+        self,
+        tg_id: int,
+        method: str,
+        amount: Decimal,
         currency: str,
-        status: str,
-        comment: Optional[str] = None
+        status: str = 'pending',
+        comment: Optional[str] = None,
+        expected_crypto_amount: Optional[Decimal] = None
     ) -> int:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            payment_id = await conn.fetchval(
-                """INSERT INTO payments (tg_id, method, amount, currency, status, comment, created_at) 
-                   VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id""",
-                tg_id, method.value, amount, currency, status, comment
-            )
-        return payment_id
+        payment = PaymentModel(
+            tg_id=tg_id,
+            method=method,
+            amount=amount,
+            currency=currency,
+            status=status,
+            comment=comment,
+            expected_crypto_amount=expected_crypto_amount
+        )
+        self.session.add(payment)
+        await self.session.commit()
+        await self.session.refresh(payment)
+        return payment.id
 
     async def get_payment(self, payment_id: int) -> Optional[Dict]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM payments WHERE id=$1", payment_id)
-        return dict(row) if row else None
+        result = await self.session.execute(select(PaymentModel).where(PaymentModel.id == payment_id))
+        payment = result.scalar_one_or_none()
+        return payment.__dict__ if payment else None
 
     async def update_payment_status(
-        self, 
-        payment_id: int, 
+        self,
+        payment_id: int,
         status: str,
         tx_hash: Optional[str] = None
     ):
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            if status == "confirmed":
-                await conn.execute(
-                    """UPDATE payments SET status=$1, tx_hash=$2, confirmed_at=NOW() 
-                       WHERE id=$3""",
-                    status, tx_hash, payment_id
-                )
-            else:
-                await conn.execute(
-                    "UPDATE payments SET status=$1 WHERE id=$2",
-                    status, payment_id
-                )
+        stmt = update(PaymentModel).where(PaymentModel.id == payment_id).values(status=status)
+        if status == 'confirmed':
+            stmt = stmt.values(tx_hash=tx_hash, confirmed_at=datetime.utcnow())
+        await self.session.execute(stmt)
+        await self.session.commit()
 
-    async def get_pending_payments(self, method: Optional[PaymentMethod] = None) -> List[Dict]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            if method:
-                rows = await conn.fetch(
-                    "SELECT * FROM payments WHERE status='pending' AND method=$1 ORDER BY created_at",
-                    method.value
-                )
-            else:
-                rows = await conn.fetch(
-                    "SELECT * FROM payments WHERE status='pending' ORDER BY created_at"
-                )
-        return [dict(row) for row in rows]
-
-    async def is_transaction_processed(self, tx_hash: str) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            exists = await conn.fetchval(
-                "SELECT 1 FROM ton_transactions WHERE tx_hash=$1",
-                tx_hash
-            )
-        return bool(exists)
+    async def get_pending_payments(
+        self,
+        method: Optional[Union[str, PaymentMethod]] = None
+    ) -> List[Dict]:
+        query = select(PaymentModel).where(PaymentModel.status == 'pending')
+        if method:
+            m = method.value if isinstance(method, PaymentMethod) else method
+            query = query.where(PaymentModel.method == m)
+        query = query.order_by(PaymentModel.created_at)
+        result = await self.session.execute(query)
+        payments = result.scalars().all()
+        return [p.__dict__ for p in payments]
 
     async def mark_transaction_processed(self, tx_hash: str):
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO ton_transactions (tx_hash, processed_at) VALUES ($1, NOW()) ON CONFLICT DO NOTHING",
-                tx_hash
-            )
+        stmt = update(TonTransaction).where(TonTransaction.tx_hash == tx_hash).values(
+            processed_at=datetime.utcnow()
+        )
+        await self.session.execute(stmt)
+        await self.session.commit()
 
-    async def is_payment_processed(self, payment_id: str) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            exists = await conn.fetchval(
-                "SELECT 1 FROM processed_payments WHERE payment_id=$1",
-                payment_id
-            )
-        return bool(exists)
+    async def mark_failed_old_payments(self):
+        threshold = datetime.utcnow() - timedelta(minutes=PAYMENT_TIMEOUT_MINUTES)
+        stmt = update(PaymentModel).where(
+            PaymentModel.status == 'pending',
+            PaymentModel.created_at < threshold
+        ).values(status='expired')
+        await self.session.execute(stmt)
+        await self.session.commit()
 
     async def mark_payment_processed(self, payment_id: str, tg_id: int, amount: Decimal) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                exists = await conn.fetchval(
-                    "SELECT 1 FROM processed_payments WHERE payment_id=$1",
-                    payment_id
-                )
-                if exists:
-                    return False
-                
-                await conn.execute(
-                    """INSERT INTO processed_payments (payment_id, tg_id, amount, processed_at) 
-                       VALUES ($1, $2, $3, NOW())""",
-                    payment_id, tg_id, amount
-                )
+        """Mark Telegram Stars payment as processed"""
+        result = await self.session.execute(
+            select(PaymentModel).where(
+                PaymentModel.tx_hash == payment_id,
+                PaymentModel.tg_id == tg_id,
+                PaymentModel.status == 'pending'
+            )
+        )
+        payment = result.scalar_one_or_none()
+        if not payment:
+            LOG.warning(f"Payment {payment_id} not found or already processed for user {tg_id}")
+            return False
+
+        payment.status = 'confirmed'
+        payment.confirmed_at = datetime.utcnow()
+        await self.session.commit()
+        LOG.info(f"Payment {payment_id} marked as processed for user {tg_id}, amount {amount}")
         return True
 
-    async def get_payment_by_comment(self, comment: str) -> Optional[Dict]:
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM payments WHERE comment=$1", comment)
-        return dict(row) if row else None
+    async def mark_payment_processed_with_lock(self, payment_id: str, tg_id: int, amount: Decimal) -> bool:
+        """Mark Telegram Stars payment as processed with database lock to prevent race conditions"""
+        result = await self.session.execute(
+            select(PaymentModel).where(
+                PaymentModel.tx_hash == payment_id,
+                PaymentModel.tg_id == tg_id,
+                PaymentModel.status == 'pending'
+            ).with_for_update()
+        )
+        payment = result.scalar_one_or_none()
+        if not payment:
+            LOG.warning(f"Payment {payment_id} not found or already processed for user {tg_id}")
+            return False
+
+        payment.status = 'confirmed'
+        payment.confirmed_at = datetime.utcnow()
+        await self.session.commit()
+        LOG.info(f"Payment {payment_id} marked as processed for user {tg_id}, amount {amount}")
+        return True
+
+    async def get_pending_ton_transaction(self, comment: str, amount: Decimal) -> Optional[TonTransaction]:
+        """Get pending TON transaction by comment and amount"""
+        result = await self.session.execute(
+            select(TonTransaction).where(
+                TonTransaction.comment == comment,
+                TonTransaction.amount >= amount * Decimal("0.95"),
+                TonTransaction.processed_at == None
+            ).order_by(TonTransaction.created_at.desc())
+        )
+        return result.scalar_one_or_none()
+
+    async def is_tx_hash_already_used(self, tx_hash: str) -> bool:
+        """Check if a transaction hash has already been used for a confirmed payment"""
+        result = await self.session.execute(
+            select(PaymentModel).where(
+                PaymentModel.tx_hash == tx_hash,
+                PaymentModel.status == 'confirmed'
+            )
+        )
+        return result.scalar_one_or_none() is not None

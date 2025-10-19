@@ -1,1 +1,1 @@
-SELECT * FROM ton_transactions
+SELECT * FROM ton_transactions 

@@ -23,6 +23,7 @@ class PaymentResult:
     url: Optional[str] = None
     wallet: Optional[str] = None
     comment: Optional[str] = None
+    expected_crypto_amount: Optional[Decimal] = None
 
 @dataclass
 class Payment:
@@ -36,3 +37,4 @@ class Payment:
     tx_hash: Optional[str]
     created_at: datetime
     confirmed_at: Optional[datetime]
+    expected_crypto_amount: Optional[Decimal] = None

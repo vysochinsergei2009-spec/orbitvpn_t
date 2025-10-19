@@ -43,10 +43,10 @@ LOCALES = {
         "max_configs_reached": "Достигнут максимум конфигураций (1). Удалите старую.",
         "no_servers": "Нет доступных серверов. Свяжитесь с поддержкой.",
         "buy_sub_text": "Выберите подписку:",
-        "sub_1m": "1 месяц - 190 RUB",
-        "sub_3m": "3 месяца - 540 RUB",
-        "sub_6m": "6 месяцев - 990 RUB",
-        "sub_12m": "12 месяцев - 1890 RUB",
+        "sub_1m": "1 месяц - {price} RUB",
+        "sub_3m": "3 месяца - {price} RUB",
+        "sub_6m": "6 месяцев - {price} RUB",
+        "sub_12m": "12 месяцев - {price} RUB",
         "sub_success": "Подписка куплена! Конфигурация создана.",
         "payment_method": "Выберите способ оплаты:",
         "pm_yookassa": "YooKassa (карта/RUB)",
@@ -58,7 +58,7 @@ LOCALES = {
         'renew_config': 'Продлить',
         'config_expired': 'Истёк',
         'config_active': 'Активно',
-        "free_trial_created": "Вы получили бесплатный пробный конфиг на 7 дней.",
+        "free_trial_created": "Пробная подписка на 7 дней активирована.",
         "referral_text": "Пригласите друга — каждый получит 50 RUB.\n\nВаша реферальная ссылка:\n{ref_link}",
         "sub_renewed_auto": "Подписка продлена автоматически.",
         "sub_expired_low_balance": "Подписка истекла (недостаточно средств для авто-продления).",
@@ -86,11 +86,13 @@ LOCALES = {
         'extend': 'Продлить',
         'ton_payment_instruction': (
                 "Оплата через TON\n\n"
-                "Отправьте **{ton_amount} TON** на кошелек:\n"
-                "`{wallet}`\n\n"
-                "Комментарий: `{comment}`\n\n"
+                "Отправьте {ton_amount} на кошелек:\n"
+                "{wallet}\n\n"
+                "Комментарий: {comment}\n\n"
                 "Без комментария платёж не будет засчитан."    
-        )       
+        ),
+        'stars_add_title': 'Пополнение баланса',
+        'stars_add_description': 'Пополните баланс на {amount} RUB'
     },
     "en": {
         "cmd_start": "Welcome to OrbitVPN! Choose an option:",
@@ -151,7 +153,7 @@ LOCALES = {
         'renew_config': 'Renew',
         'config_expired': 'Expired',
         'config_active': 'Active',
-        "free_trial_created": "You got a free 7-day trial config.",
+        "free_trial_created": "You got a free 7-day trial subscription.",
         "referral_text": "Invite a friend — each of you get 50 RUB.\n\nYour referral link:\n{ref_link}",
         "sub_renewed_auto": "Subscription renewed automatically.",
         "sub_expired_low_balance": "Subscription expired (low balance for auto-renew).",
@@ -183,7 +185,9 @@ LOCALES = {
                 "{wallet}\n\n"
                 "Comment: {comment}\n\n"
                 "Payment without the comment will not be credited."
-        )
+        ),
+        'stars_add_title': 'Add funds to balance',
+        'stars_add_description': 'Add {amount} RUB to your balance'
     }
 }
 

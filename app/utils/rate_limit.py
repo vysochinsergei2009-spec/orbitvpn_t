@@ -13,9 +13,16 @@ class RateLimitMiddleware(BaseMiddleware):
         self._lock = asyncio.Lock()
 
     def _get_key(self, event: Any) -> str:
+        # Handle message commands
         text = getattr(event, "text", None)
         if isinstance(text, str) and text.startswith("/"):
             return text.split()[0]
+
+        # Handle callback queries (for financial operations rate limiting)
+        callback_data = getattr(event, "data", None)
+        if callback_data:
+            return callback_data
+
         return event.__class__.__name__
 
     async def __call__(self, handler: Callable, event: Any, data: dict):

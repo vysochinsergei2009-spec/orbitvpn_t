@@ -1,59 +1,99 @@
-import os, json
-from aiogram import Bot
+import json
+import os
+from pathlib import Path
+from typing import Any, Final
 
+from aiogram import Bot
 from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN=os.getenv('BOT_TOKEN')
-bot = Bot(token=BOT_TOKEN)
 
-IS_LOGGING = True
-LOG_LEVEL = "DEBUG"  ''' "INFO", "DEBUG", "ERROR" '''
-LOG_AIOGRAM = False
-
-# --- DATABASE ---
-DATABASE_USER=os.getenv('DATABASE_USER')
-DATABASE_PASSWORD=os.getenv('DATABASE_PASSWORD')
-DATABASE_NAME=os.getenv('DATABASE_NAME')
-DATABASE_HOST=os.getenv('DATABASE_HOST')
-
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost") 
-
-PORT = os.getenv('PORT', 5000)
-
-# --- MARZBAN ---
-S001_MARZBAN_USERNAME=os.getenv('S001_MARZBAN_USERNAME')
-S001_MARZBAN_PASSWORD=os.getenv('S001_MARZBAN_PASSWORD')
-S001_BASE_URL=os.getenv('S001_BASE_URL', 'https://s001.orbitcorp.space:8000/')
-
-# --- TON API ---
-TON_ADDRESS=os.getenv('TON_ADDRESS')
-TONAPI_URL=os.getenv('TONAPI_URL')
-TONAPI_KEY=os.getenv('TONAPI_KEY')
-TON_EXPLORER_TX_URL = f"https://tonviewer.com/{TON_ADDRESS}"
-
-# --- CRYPTOBOT ---
-CRYPTOBOT_TOKEN = os.getenv('CRYPTOPAY_TOKEN')
-
-# --- CONSTANTS ---
-FREE_TRIAL_DAYS = 7 
-REFERRAL_BONUS = 50.0
-REDIS_TTL = 300
-
-TELEGRAM_STARS_RATE = 1.35
-TON_RUB_RATE=220
-TON_CHECK_INTERVAL=30
+class ConfigurationError(Exception):
+    pass
 
 
-with open('plans.json', 'r') as f:
-    PLANS = json.load(f)
+def _get_required_env(key: str) -> str:
+    value = os.getenv(key)
+    if not value:
+        raise ConfigurationError(f"Required environment variable '{key}' is not set")
+    return value
 
-for key, env_var in {
-    "sub_1m": "SUB_1M_PRICE",
-    "sub_3m": "SUB_3M_PRICE",
-    "sub_6m": "SUB_6M_PRICE",
-    "sub_12m": "SUB_12M_PRICE",
-}.items():
-    if key in PLANS:
-        PLANS[key]["price"] = int(os.getenv(env_var, PLANS[key]["price"]))
+
+def _get_env_int(key: str, default: int) -> int:
+    value = os.getenv(key)
+    return int(value) if value else default
+
+
+def _get_env_float(key: str, default: float) -> float:
+    value = os.getenv(key)
+    return float(value) if value else default
+
+
+def _load_plans(file_path: str = "plans.json") -> dict[str, Any]:
+    path = Path(file_path)
+    if not path.exists():
+        raise ConfigurationError(f"Plans file not found: {file_path}")
+
+    with path.open("r", encoding="utf-8") as f:
+        plans = json.load(f)
+
+    price_overrides = {
+        "sub_1m": "SUB_1M_PRICE",
+        "sub_3m": "SUB_3M_PRICE",
+        "sub_6m": "SUB_6M_PRICE",
+        "sub_12m": "SUB_12M_PRICE",
+    }
+
+    for plan_key, env_var in price_overrides.items():
+        if plan_key in plans and (override := os.getenv(env_var)):
+            plans[plan_key]["price"] = int(override)
+
+    return plans
+
+
+# --- Telegram Bot Configuration ---
+BOT_TOKEN: Final[str] = _get_required_env("BOT_TOKEN")
+bot: Final[Bot] = Bot(token=BOT_TOKEN)
+
+# --- Logging Configuration ---
+IS_LOGGING: Final[bool] = True
+LOG_LEVEL: Final[str] = "DEBUG"  # Options: "INFO", "DEBUG", "ERROR"
+LOG_AIOGRAM: Final[bool] = False
+
+# --- Database Configuration ---
+DATABASE_USER: Final[str] = _get_required_env("DATABASE_USER")
+DATABASE_PASSWORD: Final[str] = _get_required_env("DATABASE_PASSWORD")
+DATABASE_NAME: Final[str] = _get_required_env("DATABASE_NAME")
+DATABASE_HOST: Final[str] = _get_required_env("DATABASE_HOST")
+
+# --- Redis Configuration ---
+REDIS_URL: Final[str] = os.getenv("REDIS_URL", "redis://localhost")
+REDIS_TTL: Final[int] = 300  # Cache TTL in seconds (5 minutes)
+
+# --- Server Configuration ---
+PORT: Final[int] = _get_env_int("PORT", 5000)
+
+# --- Marzban VPN Panel Configuration ---
+S001_MARZBAN_USERNAME: Final[str] = _get_required_env("S001_MARZBAN_USERNAME")
+S001_MARZBAN_PASSWORD: Final[str] = _get_required_env("S001_MARZBAN_PASSWORD")
+S001_BASE_URL: Final[str] = os.getenv("S001_BASE_URL", "https://s001.orbitcorp.space:8000/")
+
+# --- TON Payment Gateway Configuration ---
+TON_ADDRESS: Final[str] = _get_required_env("TON_ADDRESS")
+TONAPI_URL: Final[str] = _get_required_env("TONAPI_URL")
+TONAPI_KEY: Final[str] = _get_required_env("TONAPI_KEY")
+TON_EXPLORER_TX_URL: Final[str] = f"https://tonviewer.com/{TON_ADDRESS}"
+TON_RUB_RATE: Final[float] = 220.0  # May be overridden by dynamic rates
+TON_CHECK_INTERVAL: Final[int] = 30  # Blockchain polling interval in seconds
+
+# --- Payment Configuration ---
+PAYMENT_TIMEOUT_MINUTES: Final[int] = 10
+TELEGRAM_STARS_RATE: Final[float] = 1.35  # Stars to RUB conversion
+
+# --- Business Logic Constants ---
+FREE_TRIAL_DAYS: Final[int] = 7
+REFERRAL_BONUS: Final[float] = 50.0
+
+# --- Subscription Plans ---
+PLANS: Final[dict[str, Any]] = _load_plans()

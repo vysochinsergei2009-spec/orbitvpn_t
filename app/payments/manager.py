@@ -1,56 +1,63 @@
 import logging
 import uuid
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 import asyncio
-
 from app.payments.models import PaymentResult, PaymentMethod
 from app.payments.gateway.base import BasePaymentGateway
 from app.payments.gateway.ton import TonGateway
 from app.payments.gateway.stars import TelegramStarsGateway
 from app.repo.payments import PaymentRepository
 from app.repo.user import UserRepository
-from config import TON_ADDRESS
+from app.repo.db import get_session
+from app.utils.redis import get_redis
+from config import bot
 
 LOG = logging.getLogger(__name__)
 
-
 class PaymentManager:
-    def __init__(self):
-        from config import bot
+    def __init__(self, session, redis_client=None):
+        self.session = session
+        self.redis_client = redis_client
         self.gateways: dict[PaymentMethod, BasePaymentGateway] = {
-            PaymentMethod.TON: TonGateway(),
-            PaymentMethod.STARS: TelegramStarsGateway(bot),
+            PaymentMethod.TON: TonGateway(session, redis_client),
+            PaymentMethod.STARS: TelegramStarsGateway(bot, session, redis_client),
         }
-        self.payment_repo = PaymentRepository()
-        self.user_repo = UserRepository()
+        self.payment_repo = PaymentRepository(session, redis_client)
+        self.user_repo = UserRepository(session, redis_client)
+        self.polling_task: Optional[asyncio.Task] = None
 
     async def create_payment(
         self,
+        t,
         tg_id: int,
         method: PaymentMethod,
         amount: Decimal,
         chat_id: Optional[int] = None,
-        payment_id: str = None,
-        comment: str = None
     ) -> PaymentResult:
         try:
             currency = "RUB"
+            comment = None
+            expected_crypto_amount = None
 
             if method == PaymentMethod.TON:
                 comment = uuid.uuid4().hex[:10]
+                from app.utils.rates import get_ton_price
+                ton_price = await get_ton_price()
+                expected_crypto_amount = (Decimal(amount) / ton_price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
             payment_id = await self.payment_repo.create_payment(
                 tg_id=tg_id,
-                method=method,
-                amount=amount,
+                method=method.value,
+                amount=amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
                 currency=currency,
-                status="pending",
-                comment=comment
+                comment=comment,
+                expected_crypto_amount=expected_crypto_amount
             )
 
             gateway = self.gateways[method]
             result = await gateway.create_payment(
+                t,
                 tg_id=tg_id,
                 amount=amount,
                 chat_id=chat_id,
@@ -58,24 +65,45 @@ class PaymentManager:
                 comment=comment
             )
 
-            # Для TON сразу обновляем транзакции в фоне
-            if method == PaymentMethod.TON:
-                from app.utils.txns_updater import TonTransactionsUpdater
-                updater = TonTransactionsUpdater(TON_ADDRESS)
-                # Запускаем однократное обновление транзакций в фоне
-                asyncio.create_task(updater.run_once())
-
             LOG.info(f"Payment created: {method} for user {tg_id}, amount {amount}, id={payment_id}")
+            if method == PaymentMethod.TON:
+                await self.start_polling_if_needed()
             return result
-
         except Exception as e:
-            LOG.exception(f"Create payment error: {e}")
+            LOG.error(f"Create payment error for user {tg_id}: {type(e).__name__}: {e}")
             raise
+
+    async def confirm_payment(self, payment_id: int, tg_id: int, amount: Decimal, tx_hash: Optional[str] = None):
+        try:
+            await self.user_repo.change_balance(tg_id, amount)
+            if tx_hash:
+                await self.payment_repo.update_payment_status(payment_id, "confirmed", tx_hash)
+            LOG.info(f"Payment {payment_id} confirmed: +{amount} for user {tg_id}, tx={tx_hash}")
+        except Exception as e:
+            LOG.error(f"Confirm payment error for user {tg_id}: {type(e).__name__}: {e}")
+            raise
+
+    async def start_polling_if_needed(self):
+        if self.polling_task is None or self.polling_task.done():
+            self.polling_task = asyncio.create_task(self.run_polling_loop())
+
+    async def run_polling_loop(self):
+        while True:
+            try:
+                pendings = await self.get_pending_payments(PaymentMethod.TON)
+                if not pendings:
+                    break
+                from app.utils.txns_updater import TonTransactionsUpdater
+                updater = TonTransactionsUpdater()
+                await updater.run_once()
+            except Exception as e:
+                LOG.error(f"Polling loop error: {type(e).__name__}: {e}")
+            await asyncio.sleep(60)
 
     async def check_payment(self, payment_id: int) -> bool:
         try:
             payment = await self.payment_repo.get_payment(payment_id)
-            if not payment:
+            if not payment or payment['status'] != 'pending':
                 return False
 
             gateway = self.gateways[PaymentMethod(payment['method'])]
@@ -86,21 +114,15 @@ class PaymentManager:
 
             return confirmed
         except Exception as e:
-            LOG.error(f"Check payment error: {e}")
+            LOG.error(f"Check payment error for payment {payment_id}: {type(e).__name__}: {e}")
             return False
 
-    async def confirm_payment(self, payment_id: int, tg_id: int, amount: Decimal):
-        try:
-            await self.user_repo.change_balance(tg_id, amount)
-            LOG.info(f"Payment {payment_id} confirmed: +{amount} for user {tg_id}")
-        except Exception as e:
-            LOG.error(f"Confirm payment error: {e}")
-            raise
-
-    async def get_pending_payments(self, method: Optional[PaymentMethod] = None):
-        return await self.payment_repo.get_pending_payments(method)
+    async def get_pending_payments(self, method: Optional[PaymentMethod | str] = None):
+        return await self.payment_repo.get_pending_payments(method if method else None)
 
     async def close(self):
         for gateway in self.gateways.values():
             if hasattr(gateway, 'close'):
                 await gateway.close()
+        if self.polling_task:
+            self.polling_task.cancel()
