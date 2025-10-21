@@ -61,7 +61,27 @@ class Referral(Base):
     reward_amount = Column(Float)
     note = Column(Text)
 
+class MarzbanInstance(Base):
+    """
+    Represents a Marzban panel instance that manages multiple nodes.
+    Each instance can have multiple nodes which are managed internally by Marzban.
+    """
+    __tablename__ = "marzban_instances"
+    id = Column(String, primary_key=True)  # e.g., "s001", "s002"
+    name = Column(String)  # Friendly name
+    base_url = Column(Text, nullable=False)  # Marzban panel URL
+    username = Column(Text, nullable=False)  # Marzban login
+    password = Column(Text, nullable=False)  # Marzban password
+    is_active = Column(Boolean, default=True)  # Enable/disable instance
+    priority = Column(Integer, default=100)  # Lower = higher priority
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 class Server(Base):
+    """
+    DEPRECATED: Use MarzbanInstance instead.
+    Kept for backward compatibility with existing data.
+    """
     __tablename__ = "servers"
     id = Column(String, primary_key=True)
     country = Column(String)

@@ -2,16 +2,16 @@ import json
 import re
 import time
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, List, Dict
 from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy import select, update, func
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import User, Config, Server
 from .db import get_session
-from .client import marzban_remove_user, marzban_modify_user, marzban_add_user
+from .client import marzban_remove_user, marzban_modify_user
+from .marzban_client import MarzbanClient
 from app.utils.logging import get_logger
 from .base import BaseRepository
 from config import REFERRAL_BONUS, REDIS_TTL
@@ -345,15 +345,34 @@ class UserRepository(BaseRepository):
         return True
 
     # ----------------------------
-    # Create config and add marzban user
+    # Create config and add marzban user (NEW: Multi-instance support)
     # ----------------------------
-    async def create_and_add_config(self, tg_id: int, server_id: str) -> Dict:
-        redis = await self.get_redis()  # Замена _get_redis на get_redis
+    async def create_and_add_config(
+        self,
+        tg_id: int,
+        manual_instance_id: Optional[str] = None
+    ) -> Dict:
+        """
+        Create a new VPN config for the user.
+
+        Args:
+            tg_id: Telegram user ID
+            manual_instance_id: Optional Marzban instance ID for manual selection
+                               (future feature: user chooses server location)
+
+        Returns:
+            Dict with config details (id, name, vless_link, server_id, username)
+
+        Raises:
+            ValueError: If subscription expired, max configs reached, or creation failed
+        """
+        redis = await self.get_redis()
         username = f'orbit_{tg_id}'
 
         if not self._validate_username(username):
             raise ValueError("Invalid username format")
 
+        # Verify user has active subscription and hasn't reached config limit
         async with get_session() as session:
             result = await session.execute(
                 select(User).where(User.tg_id == tg_id).with_for_update()
@@ -363,7 +382,7 @@ class UserRepository(BaseRepository):
                 raise ValueError("No active subscription or subscription expired")
 
             result = await session.execute(
-                select(func.count(Config.id)).where(Config.tg_id == tg_id, Config.deleted == False)  # Добавлено deleted=False
+                select(func.count(Config.id)).where(Config.tg_id == tg_id, Config.deleted == False)
             )
             count = result.scalar()
             if count >= 1:
@@ -371,50 +390,72 @@ class UserRepository(BaseRepository):
 
             days_remaining = max(1, int((user.subscription_end.timestamp() - time.time()) / 86400) + 1)
 
+        # Create user via MarzbanClient (auto-selects best instance/node)
+        marzban_client = MarzbanClient()
+
         try:
-            new_user = await marzban_add_user(username=username, days=days_remaining)
+            new_user = await marzban_client.add_user(
+                username=username,
+                days=days_remaining,
+                manual_instance_id=manual_instance_id
+            )
             if not new_user.links:
                 raise ValueError("No VLESS link returned from Marzban")
             vless_link = new_user.links[0]
+
+            # Store instance ID for future operations
+            # We get it from the selected instance during add_user
+            instance, _, _ = await marzban_client.get_best_instance_and_node(manual_instance_id)
+            instance_id = instance.id
+
         except Exception as e:
             error_str = str(e).lower()
             if "already exists" in error_str or "409" in error_str:
                 LOG.warning("Marzban user %s already exists; attempting remove+recreate", username)
-                await self._safe_remove_marzban_user(username)
-                new_user = await marzban_add_user(username=username, days=days_remaining)
+                await marzban_client.remove_user(username)
+                new_user = await marzban_client.add_user(
+                    username=username,
+                    days=days_remaining,
+                    manual_instance_id=manual_instance_id
+                )
                 if not new_user.links:
                     raise ValueError("No VLESS link after recreate")
                 vless_link = new_user.links[0]
+                instance, _, _ = await marzban_client.get_best_instance_and_node(manual_instance_id)
+                instance_id = instance.id
             else:
                 LOG.error("Marzban add_user failed for %s: %s", username, type(e).__name__, e)
                 raise
 
+        # Customize fragment for branding
         parsed = urlparse(vless_link)
         vless_link = urlunparse(parsed._replace(fragment="OrbitVPN"))
 
+        # Double-check subscription still active before saving to DB
         async with get_session() as session:
             result = await session.execute(
                 select(User).where(User.tg_id == tg_id).with_for_update()
             )
             user = result.scalar_one_or_none()
             if not user or not user.subscription_end or time.time() >= user.subscription_end.timestamp():
-                await self._safe_remove_marzban_user(username)
+                await marzban_client.remove_user(username, instance_id)
                 raise ValueError("Subscription expired during config creation")
 
             result = await session.execute(
-                select(func.count(Config.id)).where(Config.tg_id == tg_id, Config.deleted == False)  # Добавлено deleted=False
+                select(func.count(Config.id)).where(Config.tg_id == tg_id, Config.deleted == False)
             )
             count = result.scalar()
             if count >= 1:
-                await self._safe_remove_marzban_user(username)
+                await marzban_client.remove_user(username, instance_id)
                 raise ValueError("Max configs reached during creation")
 
+            # Save config to database
             new_name = f"Configuration {count + 1}"
             cfg = Config(
                 tg_id=tg_id,
                 name=new_name,
                 vless_link=vless_link,
-                server_id=server_id,
+                server_id=instance_id,  # Now stores Marzban instance ID instead of server ID
                 username=username,
                 deleted=False
             )
@@ -422,15 +463,14 @@ class UserRepository(BaseRepository):
             await session.execute(
                 update(User).where(User.tg_id == tg_id).values(configs=User.configs + 1)
             )
-            await session.execute(
-                update(Server).where(Server.id == server_id).values(users_count=Server.users_count + 1)
-            )
+            # Note: No longer updating Server.users_count as we're using MarzbanInstance
+            # Marzban tracks this internally via nodes
             await session.commit()
 
+        # Invalidate caches
         await redis.delete(f"user:{tg_id}:configs")
-        await redis.delete("servers:best")
 
-        LOG.info("Config created for user %s on server %s", tg_id, server_id)
+        LOG.info("Config created for user %s on Marzban instance %s", tg_id, instance_id)
         return {
             "id": cfg.id,
             "name": cfg.name,

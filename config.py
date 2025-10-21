@@ -54,9 +54,8 @@ def _load_plans(file_path: str = "plans.json") -> dict[str, Any]:
 
 # --- Telegram Bot Configuration ---
 BOT_TOKEN: Final[str] = _get_required_env("BOT_TOKEN")
-T_BOT_TOKEN: Final[str] = _get_required_env("T_BOT_TOKEN")
 
-bot: Final[Bot] = Bot(token=T_BOT_TOKEN)
+bot: Final[Bot] = Bot(token=BOT_TOKEN)
 
 # --- Logging Configuration ---
 IS_LOGGING: Final[bool] = True
@@ -77,9 +76,15 @@ REDIS_TTL: Final[int] = 300  # Cache TTL in seconds (5 minutes)
 PORT: Final[int] = _get_env_int("PORT", 5000)
 
 # --- Marzban VPN Panel Configuration ---
+# DEPRECATED: These single-instance configs are kept for backward compatibility
+# New deployments should use marzban_instances table in database
 S001_MARZBAN_USERNAME: Final[str] = _get_required_env("S001_MARZBAN_USERNAME")
 S001_MARZBAN_PASSWORD: Final[str] = _get_required_env("S001_MARZBAN_PASSWORD")
 S001_BASE_URL: Final[str] = os.getenv("S001_BASE_URL", "https://s001.orbitcorp.space:8000/")
+
+# Note: To add multiple Marzban instances, insert them into marzban_instances table:
+# INSERT INTO marzban_instances (id, name, base_url, username, password, is_active, priority)
+# VALUES ('s001', 'Main Server', 'https://...', 'username', 'password', TRUE, 100);
 
 # --- TON Payment Gateway Configuration ---
 TON_ADDRESS: Final[str] = _get_required_env("TON_ADDRESS")

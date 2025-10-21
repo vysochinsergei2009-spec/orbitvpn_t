@@ -1,3 +1,15 @@
+"""
+DEPRECATED: This module is deprecated in favor of MarzbanClient.
+
+The Server model and ServerRepository are kept for backward compatibility only.
+New code should use app.repo.marzban_client.MarzbanClient instead, which provides:
+- Multi-instance Marzban support
+- Automatic node load balancing
+- Better scalability
+
+This will be removed in a future version.
+"""
+
 import json
 from datetime import datetime
 from decimal import Decimal
@@ -13,6 +25,10 @@ LOG = get_logger(__name__)
 CACHE_TTL_SERVERS = 120
 
 class ServerRepository:
+    """
+    DEPRECATED: Use MarzbanClient instead.
+    This repository is kept for backward compatibility only.
+    """
     def __init__(self, redis):
         self.redis = redis
 

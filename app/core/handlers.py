@@ -114,16 +114,12 @@ async def add_config_callback(callback: CallbackQuery, t):
     async with get_session() as session:
         user_repo, server_repo, _ = await get_repositories(session)
 
-        server = await server_repo.get_best()
-        if not server:
-            await callback.answer(t('no_servers_or_cache_error'), show_alert=True)
-            return
-
+        # NEW: No longer need to fetch server manually - MarzbanClient handles selection
         await callback.answer(t('creating_config'))
 
         try:
-            await user_repo.create_and_add_config(tg_id, server['id'])
-            await server_repo.increment_users(server['id'])
+            await user_repo.create_and_add_config(tg_id)
+            # NEW: No longer incrementing Server.users_count - Marzban tracks internally
             await update_configs_view(callback, t, user_repo, tg_id, t('config_created'))
 
         except ValueError as e:
@@ -132,6 +128,8 @@ async def add_config_callback(callback: CallbackQuery, t):
                 await callback.message.edit_text(t('subscription_expired'), reply_markup=sub_kb(t))
             elif "Max configs reached" in error_msg:
                 await callback.answer(t('max_configs_reached'), show_alert=True)
+            elif "No active Marzban instances" in error_msg:
+                await callback.answer(t('no_servers_or_cache_error'), show_alert=True)
             else:
                 LOG.error(f"ValueError creating config for user {tg_id}: {error_msg}")
                 await callback.answer(t('error_creating_config'), show_alert=True)
