@@ -8,6 +8,7 @@ from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, ContentType
 from aiogram.filters.state import State, StatesGroup, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramBadRequest
 
 from app.core.keyboards import (
     main_kb, balance_kb, set_kb, myvpn_kb, actions_kb,
@@ -27,6 +28,17 @@ from config import FREE_TRIAL_DAYS, TELEGRAM_STARS_RATE, TON_RUB_RATE, PLANS, bo
 
 router = Router()
 LOG = get_logger(__name__)
+
+
+async def safe_answer_callback(callback: CallbackQuery, text: str = None, show_alert: bool = False):
+    """Safely answer callback query, ignoring 'query too old' errors"""
+    try:
+        await callback.answer(text=text, show_alert=show_alert)
+    except TelegramBadRequest as e:
+        if "query is too old" in str(e).lower() or "query id is invalid" in str(e).lower():
+            LOG.debug(f"Callback query expired for user {callback.from_user.id}, ignoring")
+        else:
+            raise
 
 
 class PaymentState(StatesGroup):
@@ -91,16 +103,19 @@ async def cmd_start(message: Message, t):
     async with get_session() as session:
         user_repo, _, _ = await get_repositories(session)
 
-        if await user_repo.add_if_not_exists(tg_id, username, referrer_id=referrer_id):
+        is_new_user = await user_repo.add_if_not_exists(tg_id, username, referrer_id=referrer_id)
+        if is_new_user:
             await user_repo.buy_subscription(tg_id, days=FREE_TRIAL_DAYS, price=0.0)
-            await message.answer(t("free_trial_activated"))
 
         await message.answer(t("cmd_start"), reply_markup=main_kb(t))
+
+        if is_new_user:
+            await message.answer(t("free_trial_activated"))
 
 
 @router.callback_query(F.data == "myvpn")
 async def myvpn_callback(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
 
     async with get_session() as session:
         user_repo, _, _ = await get_repositories(session)
@@ -115,7 +130,7 @@ async def add_config_callback(callback: CallbackQuery, t):
         user_repo, server_repo, _ = await get_repositories(session)
 
         # NEW: No longer need to fetch server manually - MarzbanClient handles selection
-        await callback.answer(t('creating_config'))
+        await safe_answer_callback(callback, t('creating_config'))
 
         try:
             await user_repo.create_and_add_config(tg_id)
@@ -127,21 +142,21 @@ async def add_config_callback(callback: CallbackQuery, t):
             if "No active subscription" in error_msg or "Subscription expired" in error_msg:
                 await callback.message.edit_text(t('subscription_expired'), reply_markup=sub_kb(t))
             elif "Max configs reached" in error_msg:
-                await callback.answer(t('max_configs_reached'), show_alert=True)
+                await safe_answer_callback(callback, t('max_configs_reached'), show_alert=True)
             elif "No active Marzban instances" in error_msg:
-                await callback.answer(t('no_servers_or_cache_error'), show_alert=True)
+                await safe_answer_callback(callback, t('no_servers_or_cache_error'), show_alert=True)
             else:
                 LOG.error(f"ValueError creating config for user {tg_id}: {error_msg}")
-                await callback.answer(t('error_creating_config'), show_alert=True)
+                await safe_answer_callback(callback, t('error_creating_config'), show_alert=True)
 
         except Exception as e:
             LOG.error(f"Unexpected error creating config for user {tg_id}: {type(e).__name__}: {e}")
-            await callback.answer(t('error_creating_config'), show_alert=True)
+            await safe_answer_callback(callback, t('error_creating_config'), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("cfg_"))
 async def config_selected(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
     cfg_id = int(callback.data.split("_")[1])
     tg_id = callback.from_user.id
 
@@ -168,17 +183,17 @@ async def config_delete(callback: CallbackQuery, t):
 
         try:
             await user_repo.delete_config(cfg_id, tg_id)
-            await callback.answer(t("config_deleted"))
+            await safe_answer_callback(callback, t("config_deleted"))
             await update_configs_view(callback, t, user_repo, tg_id)
 
         except Exception as e:
             LOG.error(f"Error deleting config {cfg_id} for user {tg_id}: {type(e).__name__}: {e}")
-            await callback.answer(t('error_deleting_config'), show_alert=True)
+            await safe_answer_callback(callback, t('error_deleting_config'), show_alert=True)
 
 
 @router.callback_query(F.data == "buy_sub")
 async def buy_sub_callback(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
     tg_id = callback.from_user.id
 
     async with get_session() as session:
@@ -208,16 +223,17 @@ async def sub_buy_callback(callback: CallbackQuery, t):
         balance = await user_repo.get_balance(tg_id)
 
         if balance < price:
-            await callback.answer(t('low_balance'), show_alert=True)
+            await safe_answer_callback(callback, t('low_balance'), show_alert=True)
             return
 
         if not await user_repo.buy_subscription(tg_id, days, price):
             LOG.error(f"Failed to buy subscription for user {tg_id}: plan {callback.data}")
-            await callback.answer(t('error_buying_sub'), show_alert=True)
+            await safe_answer_callback(callback, t('error_buying_sub'), show_alert=True)
             return
 
         configs = await user_repo.get_configs(tg_id)
-        await callback.answer(
+        await safe_answer_callback(
+            callback,
             t('sub_purchased_create_config') if not configs else t('sub_purchased'),
             show_alert=True
         )
@@ -238,7 +254,7 @@ async def sub_buy_callback(callback: CallbackQuery, t):
 
 @router.callback_query(F.data == "renew_subscription")
 async def renew_subscription_callback(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
     tg_id = callback.from_user.id
 
     async with get_session() as session:
@@ -255,7 +271,7 @@ async def renew_subscription_callback(callback: CallbackQuery, t):
 
 @router.callback_query(F.data == 'balance')
 async def balance_callback(callback: CallbackQuery, t, state: FSMContext):
-    await callback.answer()
+    await safe_answer_callback(callback)
     await state.clear()
     tg_id = callback.from_user.id
 
@@ -281,7 +297,7 @@ async def balance_callback(callback: CallbackQuery, t, state: FSMContext):
 
 @router.callback_query(F.data == 'add_funds')
 async def add_funds_callback(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
     await callback.message.edit_text(
         t('payment_method'),
         reply_markup=get_payment_methods_keyboard(t)
@@ -290,7 +306,7 @@ async def add_funds_callback(callback: CallbackQuery, t):
 
 @router.callback_query(F.data.startswith('select_method_'))
 async def select_payment_method(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
     method = callback.data.replace('select_method_', '')
     await callback.message.edit_text(
         t('select_amount'),
@@ -300,7 +316,7 @@ async def select_payment_method(callback: CallbackQuery, t):
 
 @router.callback_query(F.data.startswith('amount_'))
 async def process_amount_selection(callback: CallbackQuery, t, state: FSMContext):
-    await callback.answer()
+    await safe_answer_callback(callback)
     parts = callback.data.split('_')
     method_str = parts[1]
     amount_str = parts[2]
@@ -470,13 +486,13 @@ async def successful_payment(message: Message, t):
 
 @router.callback_query(F.data == 'back_main')
 async def back_to_main(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
     await callback.message.edit_text(t('welcome'), reply_markup=main_kb(t))
 
 
 @router.callback_query(F.data == 'instruction')
 async def instruction_callback(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
     await callback.message.edit_text(
         t("instruction_text"),
         parse_mode="HTML",
@@ -486,13 +502,13 @@ async def instruction_callback(callback: CallbackQuery, t):
 
 @router.callback_query(F.data == 'settings')
 async def settings_callback(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
     await callback.message.edit_text(t("settings_text"), reply_markup=set_kb(t))
 
 
 @router.callback_query(F.data == 'change_lang')
 async def change_lang_callback(callback: CallbackQuery, t):
-    await callback.answer()
+    await safe_answer_callback(callback)
     await callback.message.edit_text(
         t("choose_language"),
         reply_markup=get_language_keyboard(t)
@@ -508,7 +524,7 @@ async def set_lang_callback(callback: CallbackQuery, t):
         user_repo, _, _ = await get_repositories(session)
         await user_repo.set_lang(tg_id, lang)
 
-    await callback.answer(t("language_updated"), show_alert=True)
+    await safe_answer_callback(callback, t("language_updated"), show_alert=True)
 
     new_t = lambda key, **kwargs: t(key=key, lang=lang)
     await callback.message.edit_text(
@@ -520,7 +536,7 @@ async def set_lang_callback(callback: CallbackQuery, t):
 @router.callback_query(F.data == 'referral')
 async def referral(callback: CallbackQuery, t):
     """Display referral program information and link."""
-    await callback.answer()
+    await safe_answer_callback(callback)
     tg_id = callback.from_user.id
 
     bot_username = (await callback.message.bot.get_me()).username

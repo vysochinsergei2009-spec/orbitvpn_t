@@ -9,8 +9,8 @@ VALUES (
     's001',
     'Main Marzban Server',
     'https://s001.orbitcorp.space:8000/',
-    'admin',  -- Replace with S001_MARZBAN_USERNAME from .env
-    'your_password_here',  -- Replace with S001_MARZBAN_PASSWORD from .env
+    'sanenh',
+    '8457',
     TRUE,
     100
 )
