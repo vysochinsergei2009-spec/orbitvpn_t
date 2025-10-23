@@ -28,6 +28,7 @@ LOCALES = {
         "back_main": "В главное меню",
         "back": "Назад",
         "delete_config": "Удалить",
+        "qr_code": "QR-код",
         "error_creating_payment": "Ошибка при создании платежа. Попробуйте позже.",
         "top_up_text": "Ссылка для пополнения {amount} RUB: {payment_url}",
         "link_not_found": "(Ссылка не найдена)",
@@ -79,7 +80,7 @@ LOCALES = {
         "error_buying_sub": "Ошибка при покупке подписки",
         "sub_success_with_expire": "Подписка активна до: {expire_date}",
         "extend_subscription": "Выберите срок продления:",
-        "current_sub_until": "Текущая подписка действует до: {expire_date}",
+        "current_sub_until": "Подписка действует до: {expire_date}",
         "add_config": "Добавить конфигурацию",
         'share': 'Поделиться',
         "too_fast": "Вы отправляете слишком много запросов",
@@ -101,7 +102,8 @@ LOCALES = {
                 "Без комментария платёж не будет засчитан."    
         ),
         'stars_add_title': 'Пополнение баланса',
-        'stars_add_description': 'Пополните баланс на {amount} RUB'
+        'stars_add_description': 'Пополните баланс на {amount} RUB',
+        'how_to_install': 'Инструкция по установке'
     },
     "en": {
         "cmd_start": "Welcome to OrbitVPN! Choose an option:",
@@ -132,6 +134,7 @@ LOCALES = {
         "back_main": "Back to main",
         "back": "Back",
         "delete_config": "Delete",
+        "qr_code": "QR Code",
         "error_creating_payment": "Error creating payment. Try later.",
         "top_up_text": "Click to top up {amount} RUB: {payment_url}",
         "link_not_found": "(Link not found)",
@@ -183,7 +186,7 @@ LOCALES = {
         "error_buying_sub": "Error purchasing subscription",
         "sub_success_with_expire": "Subscription active until: {expire_date}",
         "extend_subscription": "Select the duration:",
-        "current_sub_until": "Current subscription valid until: {expire_date}",
+        "current_sub_until": "Subscription valid until: {expire_date}",
         "add_config": "Add configuration",
         'share': 'Share',
         "too_fast": "You're sending too many requests",
@@ -205,7 +208,8 @@ LOCALES = {
                 "Payment without the comment will not be credited."
         ),
         'stars_add_title': 'Add funds to balance',
-        'stars_add_description': 'Add {amount} RUB to your balance'
+        'stars_add_description': 'Add {amount} RUB to your balance',
+        'how_to_install': 'How to install'
     }
 }
 

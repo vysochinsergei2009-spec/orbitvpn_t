@@ -28,7 +28,6 @@ def _build_keyboard(
 
 
 def main_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
-    """Main menu with prioritized button hierarchy"""
     return _build_keyboard([
         {'text': t('my_vpn'), 'callback_data': 'myvpn'},
         {'text': t('balance'), 'callback_data': 'balance'},
@@ -84,18 +83,13 @@ def myvpn_kb(
 
 def actions_kb(t: Callable[[str], str], cfg_id: int | None = None) -> InlineKeyboardMarkup:
     delete_callback = f"delete_cfg_{cfg_id}" if cfg_id else "delete_config"
+    qr_callback = f"qr_cfg_{cfg_id}" if cfg_id else "qr_config"
 
     return _build_keyboard([
         {'text': t('delete_config'), 'callback_data': delete_callback},
-        {'text': t('instruction'), 'callback_data': 'instruction'},
+        {'text': t('qr_code'), 'callback_data': qr_callback},
         {'text': t('back'), 'callback_data': 'myvpn'},
     ], adjust=2)
-
-
-def instruction_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
-    return _build_keyboard([
-        {'text': t('back'), 'callback_data': 'myvpn'},
-    ])
 
 
 def get_language_keyboard(t: Callable[[str], str]) -> InlineKeyboardMarkup:
@@ -107,21 +101,13 @@ def get_language_keyboard(t: Callable[[str], str]) -> InlineKeyboardMarkup:
 
 
 def sub_kb(t: Callable[[str], str], is_extension: bool = False) -> InlineKeyboardMarkup:
-    """Subscription purchase/extension keyboard
-
-    Args:
-        t: Translation function
-        is_extension: If True, shows "+ X months" format for extensions
-    """
     if is_extension:
-        # Extension format with "+" prefix
         buttons = [
             {'text': t(f'extend_by_{key.split("_")[1]}').format(price=plan['price']), 'callback_data': key}
             for key, plan in PLANS.items()
             if key.startswith('sub_')
         ]
     else:
-        # New subscription format
         buttons = [
             {'text': t(key).format(price=plan['price']), 'callback_data': key}
             for key, plan in PLANS.items()
@@ -138,7 +124,7 @@ def get_payment_methods_keyboard(t: Callable[[str], str]) -> InlineKeyboardMarku
         {'text': 'TON', 'callback_data': 'select_method_ton'},
         {'text': t('pm_stars'), 'callback_data': 'select_method_stars'},
         {'text': t('back'), 'callback_data': 'balance'},
-    ], adjust=2)
+    ], adjust=1)
 
 
 def get_referral_keyboard(t: Callable[[str], str], ref_link: str) -> InlineKeyboardMarkup:

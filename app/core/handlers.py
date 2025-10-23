@@ -1,18 +1,20 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Callable, Optional
+from io import BytesIO
 
 from aiogram import Router, F
 from aiogram.filters import CommandStart
-from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, ContentType
+from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, ContentType, LinkPreviewOptions, BufferedInputFile
 from aiogram.filters.state import State, StatesGroup, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
+import qrcode
 
-from app.core.keyboards import (
+from .keyboards import (
     main_kb, balance_kb, set_kb, myvpn_kb, actions_kb,
-    get_language_keyboard, instruction_kb, sub_kb,
+    get_language_keyboard, sub_kb,
     get_payment_methods_keyboard, get_referral_keyboard, back_balance,
     get_payment_amounts_keyboard, payment_success_actions
 )
@@ -24,6 +26,7 @@ from app.payments.models import PaymentMethod
 from app.repo.db import get_session
 from app.utils.logging import get_logger
 from app.utils.redis import get_redis
+from app.locales.telegraph.tph import get_install_guide_url
 from config import FREE_TRIAL_DAYS, TELEGRAM_STARS_RATE, TON_RUB_RATE, PLANS, bot
 
 router = Router()
@@ -31,7 +34,6 @@ LOG = get_logger(__name__)
 
 
 async def safe_answer_callback(callback: CallbackQuery, text: str = None, show_alert: bool = False):
-    """Safely answer callback query, ignoring 'query too old' errors"""
     try:
         await callback.answer(text=text, show_alert=show_alert)
     except TelegramBadRequest as e:
@@ -155,7 +157,7 @@ async def add_config_callback(callback: CallbackQuery, t):
 
 
 @router.callback_query(F.data.startswith("cfg_"))
-async def config_selected(callback: CallbackQuery, t):
+async def config_selected(callback: CallbackQuery, t, lang: str):
     await safe_answer_callback(callback)
     cfg_id = int(callback.data.split("_")[1])
     tg_id = callback.from_user.id
@@ -169,8 +171,15 @@ async def config_selected(callback: CallbackQuery, t):
             await callback.message.edit_text(t('config_not_found'), reply_markup=actions_kb(t, cfg_id))
             return
 
-        text = f"{t('your_config')}\n\n{t('config_selected')}\n<pre><code>{cfg['vless_link']}</code></pre>"
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=actions_kb(t, cfg_id))
+        install_url = await get_install_guide_url(lang)
+
+        text = f"{t('your_config')}\n\n{t('config_selected')}\n<pre><code>{cfg['vless_link']}</code></pre>\n<a href='{install_url}'>{t('how_to_install')}</a>"
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=actions_kb(t, cfg_id),
+            link_preview_options=LinkPreviewOptions(is_disabled=True)
+        )
 
 
 @router.callback_query(F.data.startswith("delete_cfg_"))
@@ -189,6 +198,52 @@ async def config_delete(callback: CallbackQuery, t):
         except Exception as e:
             LOG.error(f"Error deleting config {cfg_id} for user {tg_id}: {type(e).__name__}: {e}")
             await safe_answer_callback(callback, t('error_deleting_config'), show_alert=True)
+
+
+@router.callback_query(F.data.startswith("qr_cfg_"))
+async def qr_config(callback: CallbackQuery, t):
+    await safe_answer_callback(callback)
+    cfg_id = int(callback.data.split("_")[2])
+    tg_id = callback.from_user.id
+
+    async with get_session() as session:
+        user_repo, _, _ = await get_repositories(session)
+        configs = await user_repo.get_configs(tg_id)
+
+        cfg = next((c for c in configs if c["id"] == cfg_id), None)
+        if not cfg:
+            await safe_answer_callback(callback, t('config_not_found'), show_alert=True)
+            return
+
+        try:
+            # Generate QR code from VLESS link
+            qr = qrcode.QRCode(
+                version=1,  # Auto-adjust size
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(cfg['vless_link'])
+            qr.make(fit=True)
+
+            # Create image
+            img = qr.make_image(fill_color="black", back_color="white")
+
+            # Save to BytesIO in WebP format
+            bio = BytesIO()
+            img.save(bio, format='PNG')  # QR codes better in PNG (lossless)
+            bio.seek(0)
+
+            # Send photo
+            photo = BufferedInputFile(bio.read(), filename="qr_code.png")
+            await callback.message.answer_photo(
+                photo=photo,
+                caption=t('your_config')
+            )
+
+        except Exception as e:
+            LOG.error(f"Error generating QR code for config {cfg_id}: {type(e).__name__}: {e}")
+            await safe_answer_callback(callback, t('error_creating_config'), show_alert=True)
 
 
 @router.callback_query(F.data == "buy_sub")
@@ -488,16 +543,6 @@ async def successful_payment(message: Message, t):
 async def back_to_main(callback: CallbackQuery, t):
     await safe_answer_callback(callback)
     await callback.message.edit_text(t('welcome'), reply_markup=main_kb(t))
-
-
-@router.callback_query(F.data == 'instruction')
-async def instruction_callback(callback: CallbackQuery, t):
-    await safe_answer_callback(callback)
-    await callback.message.edit_text(
-        t("instruction_text"),
-        parse_mode="HTML",
-        reply_markup=instruction_kb(t)
-    )
 
 
 @router.callback_query(F.data == 'settings')

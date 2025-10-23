@@ -53,11 +53,12 @@ Install with: `pip install -r requirements.txt`
 **app/repo/** - Repository pattern for data access
 - `base.py` - BaseRepository with Redis integration
 - `db.py` - Database session management and SQLAlchemy engine configuration
-- `models.py` - SQLAlchemy models (User, Config, Payment, Server, TonTransaction, Promocode, Referral)
+- `models.py` - SQLAlchemy models (User, Config, Payment, Server, TonTransaction, Promocode, Referral, MarzbanInstance)
 - `user.py` - UserRepository for user operations, subscriptions, configs, balance (uses Redis caching)
-- `server.py` - ServerRepository for VPN server selection and load balancing (Redis-cached)
+- `marzban_client.py` - **NEW**: Multi-instance Marzban client with load balancing and node exclusion
+- `server.py` - **DEPRECATED**: Old ServerRepository (use marzban_client.py instead)
+- `client.py` - **DEPRECATED**: Old Marzban API wrapper (use marzban_client.py instead)
 - `payments.py` - PaymentRepository for payment transactions
-- `client.py` - Marzban API client wrapper (if exists)
 
 **app/payments/** - Payment processing system
 - `manager.py` - PaymentManager orchestrates payment creation and confirmation
@@ -107,13 +108,18 @@ Extensive Redis caching with keys like:
 4. For Stars: Telegram invoice → pre_checkout_query → successful_payment handler
 5. Payment confirmation updates user balance and marks payment as processed
 
-### VPN Config Management
+### VPN Config Management (NEW Multi-Instance System)
 1. User requests config via `/add_config`
 2. System checks active subscription status
-3. Selects best server via ServerRepository.get_best()
-4. Creates Marzban user via `marzban_add_user()` (from app.client module)
-5. Stores config in database with VLESS link
-6. Updates server user count and invalidates cache
+3. **MarzbanClient** selects best instance and node:
+   - Queries all active `MarzbanInstance` records
+   - Fetches node metrics from each instance (users, traffic, usage_coefficient)
+   - **Excludes nodes** listed in `excluded_node_names` array
+   - Calculates load score for each node
+   - Selects least loaded node across all instances
+4. Creates Marzban user via `MarzbanClient.add_user()`
+5. Stores config in database with VLESS link and instance_id
+6. No manual server tracking - Marzban handles internally
 
 ### Middleware Stack
 Order matters - applied in run.py:

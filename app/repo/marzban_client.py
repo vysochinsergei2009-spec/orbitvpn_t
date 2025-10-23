@@ -100,37 +100,55 @@ class MarzbanClient:
         Fetch node metrics for a given Marzban instance.
 
         Returns metrics including active users count and traffic data.
+        Excludes nodes listed in instance.excluded_node_names.
         """
         try:
             # Fetch all nodes
-            nodes = await api.get_nodes()
+            try:
+                nodes = await api.get_nodes()
+            except Exception as e:
+                # Nodes API not available in this Marzban version
+                LOG.debug(f"Nodes API not available for instance {instance.id}: {e}")
+                return []
 
-            # Fetch node usage stats
-            usage_response = await api.get_nodes_usage()
-            usage_map = {
-                u.node_id: u for u in usage_response.usages
-                if u.node_id is not None
-            }
+            # Filter out excluded nodes
+            excluded_names = instance.excluded_node_names or []
+            if excluded_names:
+                original_count = len(nodes)
+                nodes = [n for n in nodes if n.name not in excluded_names]
+                if len(nodes) < original_count:
+                    LOG.info(f"Excluded {original_count - len(nodes)} node(s) from instance {instance.id}: {excluded_names}")
+
+            # If all nodes are excluded, return empty
+            if not nodes:
+                LOG.warning(f"All nodes excluded for instance {instance.id}")
+                return []
+
+            # Fetch node usage stats (optional, may not exist in older Marzban)
+            usage_map = {}
+            try:
+                usage_response = await api.get_nodes_usage()
+                usage_map = {
+                    u.node_id: u for u in usage_response.usages
+                    if u.node_id is not None
+                }
+            except Exception as e:
+                LOG.debug(f"Node usage API not available for instance {instance.id}: {e}")
 
             # Get active users per node
             # Note: We need to count users per node by fetching all users
             # This is expensive but necessary for accurate load balancing
             # TODO: Consider caching this data with TTL
-            users = await api.get_users(limit=10000)  # Adjust limit as needed
+            try:
+                users = await api.get_users(limit=10000)  # Adjust limit as needed
+                total_active_users = sum(1 for u in users.users if u.status == 'active')
+            except Exception as e:
+                LOG.debug(f"Failed to get users for instance {instance.id}: {e}")
+                total_active_users = 0
 
             users_per_node: Dict[int, int] = {}
-            for user in users.users:
-                # Count users that have inbounds on this node
-                if hasattr(user, 'inbounds') and user.inbounds:
-                    for inbound_tag in user.inbounds.keys():
-                        # Inbound format typically includes node info
-                        # For now, we'll count total active users
-                        # and distribute evenly (can be improved)
-                        pass
-
             # For now, estimate users per node as total / node count
             # This is a simplification - ideally Marzban API would provide this
-            total_active_users = sum(1 for u in users.users if u.status == 'active')
             node_count = len(nodes)
             avg_users_per_node = total_active_users / node_count if node_count > 0 else 0
 

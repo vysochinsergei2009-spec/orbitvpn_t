@@ -1,11 +1,12 @@
-# Fixed Issues
+При создании конфига пишет что выбрана нода S002:
 
-## Issue 1 - FIXED: Callback Query Timeout (2025-10-22)
-**Error**: `aiogram.exceptions.TelegramBadRequest: query is too old and response timeout expired or query ID is invalid`
+[2025-10-22 19:15:10,292] INFO in app.repo.marzban_client: Selected node S002 (ID: 1) on instance s001 with load score 0.00
+[2025-10-22 19:15:10,334] INFO in app.repo.marzban_client: Created user orbit_7559373710 on instance s001 (target node: 1)
+[2025-10-22 19:15:10,417] INFO in app.repo.marzban_client: Selected node S002 (ID: 1) on instance s001 with load score 0.00
+[2025-10-22 19:15:10,431] INFO in app.repo.user: Config created for user 7559373710 on Marzban instance s001
+[2025-10-22 19:15:10,502] INFO in aiogram.event: Update id=705045272 is handled. Duration 631 ms by bot id=8461779178
+[2025-10-22 19:15:11,835] INFO in aiogram.event: Update id=705045273 is handled. Duration 166 ms by bot id=8461779178
 
-**Solution**: All `callback.answer()` calls wrapped with `safe_answer_callback()` helper that ignores timeout errors.
+но при этом IP адрес не соответствует ноде S002 и выдает ссылку с конфигом на S001 (главный сервер)
 
----
-
-## Issue 2 - NEW: Payment Error
-[2025-10-22 17:08:25,574] ERROR in app.core.handlers: Payment error for user 7559373710: AttributeError: 'Message' object has no attribute 'message'
+нужно чтоб на главном сервере не было юзеров впн, только на нодах.

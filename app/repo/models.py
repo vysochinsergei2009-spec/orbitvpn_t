@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, Integer, BigInteger, String, Boolean, DateTime, Numeric, Float, Text, CHAR
+    Column, Integer, BigInteger, String, Boolean, DateTime, Numeric, Float, Text, CHAR, ARRAY
 )
 from .db import Base
 from datetime import datetime
@@ -74,6 +74,7 @@ class MarzbanInstance(Base):
     password = Column(Text, nullable=False)  # Marzban password
     is_active = Column(Boolean, default=True)  # Enable/disable instance
     priority = Column(Integer, default=100)  # Lower = higher priority
+    excluded_node_names = Column(ARRAY(String), default=[])  # Node names to exclude from load balancing
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

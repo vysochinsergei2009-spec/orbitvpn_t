@@ -10,7 +10,6 @@ from sqlalchemy import select, update, func
 
 from .models import User, Config, Server
 from .db import get_session
-from .client import marzban_remove_user, marzban_modify_user
 from .marzban_client import MarzbanClient
 from app.utils.logging import get_logger
 from .base import BaseRepository
@@ -167,20 +166,22 @@ class UserRepository(BaseRepository):
     # Marzban safe wrappers
     # ----------------------------
     async def _safe_remove_marzban_user(self, username: str):
+        marzban_client = MarzbanClient()
         try:
-            await marzban_remove_user(username)
+            await marzban_client.remove_user(username)
             LOG.info("Removed marzban user %s", username)
         except Exception as e:
             LOG.warning("Failed to remove marzban user %s: %s", username, e)
             try:
-                await marzban_modify_user(username, expire=int(time.time() - 86400))
+                await marzban_client.modify_user(username, expire=int(time.time() - 86400))
                 LOG.info("Expired marzban user %s as fallback", username)
             except Exception as ex:
                 LOG.error("Failed to expire marzban user %s during fallback: %s", username, ex)
 
     async def _safe_modify_marzban_user(self, username: str, expire_ts: int):
+        marzban_client = MarzbanClient()
         try:
-            await marzban_modify_user(username, expire=expire_ts)
+            await marzban_client.modify_user(username, expire=expire_ts)
             LOG.info("Modified marzban user %s expire=%s", username, expire_ts)
         except Exception as e:
             LOG.error("Failed to modify marzban user %s expire=%s: %s", username, expire_ts, e)

@@ -54,6 +54,7 @@ def _load_plans(file_path: str = "plans.json") -> dict[str, Any]:
 
 # --- Telegram Bot Configuration ---
 BOT_TOKEN: Final[str] = _get_required_env("BOT_TOKEN")
+TPH_TOKEN: Final[str] = _get_required_env('TELEGRAPH_TOKEN')
 
 bot: Final[Bot] = Bot(token=BOT_TOKEN)
 
