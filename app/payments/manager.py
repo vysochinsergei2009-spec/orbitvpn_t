@@ -39,6 +39,21 @@ class PaymentManager:
         force_new: bool = False,
     ) -> PaymentResult:
         try:
+            from app.repo.models import User
+            from sqlalchemy import select
+
+            # CRITICAL FIX: Lock user row BEFORE checking for active payments
+            # This prevents race condition where two concurrent requests both pass
+            # the check and create duplicate payments
+            result = await self.session.execute(
+                select(User)
+                .where(User.tg_id == tg_id)
+                .with_for_update()  # Serialize payment creation per user
+            )
+            user = result.scalar_one_or_none()
+            if not user:
+                raise ValueError(f"User {tg_id} not found")
+
             # Check for active pending payments unless force_new=True
             if not force_new:
                 active_payments = await self.payment_repo.get_active_pending_payments(tg_id)
@@ -130,8 +145,14 @@ class PaymentManager:
             gateway = self.gateways[PaymentMethod(payment['method'])]
             confirmed = await gateway.check_payment(payment_id)
 
-            if confirmed:
-                await self.confirm_payment(payment_id, payment['tg_id'], payment['amount'])
+            # NOTE: TON and CryptoBot gateways handle balance updates internally
+            # to maintain atomicity with transaction locks. Only call confirm_payment
+            # for gateways that don't do this (currently: Stars via webhook)
+            # For TON/CryptoBot, check_payment() already updated balance + payment status
+
+            # Don't double-credit: TON and CryptoBot already updated balance in check_payment()
+            # if confirmed and payment['method'] not in ['ton', 'cryptobot']:
+            #     await self.confirm_payment(payment_id, payment['tg_id'], payment['amount'])
 
             return confirmed
         except Exception as e:

@@ -2,6 +2,7 @@ from io import BytesIO
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, LinkPreviewOptions, BufferedInputFile
+from sqlalchemy.exc import OperationalError, TimeoutError as SQLTimeoutError
 import qrcode
 
 from app.core.keyboards import actions_kb, sub_kb, qr_delete_kb
@@ -47,6 +48,10 @@ async def add_config_callback(callback: CallbackQuery, t):
             else:
                 LOG.error(f"ValueError creating config for user {tg_id}: {error_msg}")
                 await safe_answer_callback(callback, t('error_creating_config'), show_alert=True)
+
+        except (OperationalError, SQLTimeoutError) as e:
+            LOG.error(f"Database error creating config for user {tg_id}: {type(e).__name__}: {e}")
+            await safe_answer_callback(callback, t('service_temporarily_unavailable'), show_alert=True)
 
         except Exception as e:
             LOG.error(f"Unexpected error creating config for user {tg_id}: {type(e).__name__}: {e}")

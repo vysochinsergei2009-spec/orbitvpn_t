@@ -55,6 +55,19 @@ class TonGateway(BasePaymentGateway):
         )
 
     async def check_payment(self, payment_id: int) -> bool:
+        """
+        Check if TON payment has been confirmed on blockchain.
+
+        CRITICAL FIX: Uses database locks to prevent replay attacks and race conditions
+        where one TON transaction could confirm multiple payments.
+
+        Returns:
+            True if payment was confirmed successfully
+        """
+        from app.repo.models import Payment as PaymentModel, User
+        from sqlalchemy import select
+
+        # Get payment details
         payment = await self.payment_repo.get_payment(payment_id)
         if not payment:
             LOG.warning(f"Payment {payment_id} not found")
@@ -64,24 +77,82 @@ class TonGateway(BasePaymentGateway):
             LOG.debug(f"TON payment {payment_id} incomplete: {payment}")
             return False
 
+        if payment.get('status') != 'pending':
+            LOG.debug(f"TON payment {payment_id} already {payment.get('status')}")
+            return False
+
+        # CRITICAL FIX: Lock payment row AND user row to prevent concurrent confirmations
+        result = await self.session.execute(
+            select(PaymentModel)
+            .where(PaymentModel.id == payment_id)
+            .with_for_update()  # Lock payment row
+        )
+        payment_locked = result.scalar_one_or_none()
+
+        if not payment_locked or payment_locked.status != 'pending':
+            LOG.debug(f"Payment {payment_id} not pending or already confirmed")
+            return False
+
+        # Lock user row for atomic balance update
+        result = await self.session.execute(
+            select(User)
+            .where(User.tg_id == payment_locked.tg_id)
+            .with_for_update()
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            LOG.error(f"User {payment_locked.tg_id} not found for payment {payment_id}")
+            return False
+
+        # Find matching TON transaction
         tx = await self.payment_repo.get_pending_ton_transaction(
-            comment=payment['comment'],
-            amount=payment['expected_crypto_amount']
+            comment=payment_locked.comment,
+            amount=payment_locked.expected_crypto_amount
         )
 
         if not tx:
             return False
 
-        # Prevent replay attacks: check if tx_hash already used for another payment
-        if await self.payment_repo.is_tx_hash_already_used(tx.tx_hash):
-            LOG.warning(f"TON transaction {tx.tx_hash} already used for another payment, rejecting replay")
+        # Check if tx_hash already used (should be prevented by unique constraint)
+        if payment_locked.tx_hash is not None:
+            LOG.warning(f"Payment {payment_id} already has tx_hash: {payment_locked.tx_hash}")
+            return False
+
+        # Check if this tx_hash is used by another payment
+        result = await self.session.execute(
+            select(PaymentModel)
+            .where(PaymentModel.tx_hash == tx.tx_hash)
+        )
+        existing_payment = result.scalar_one_or_none()
+        if existing_payment:
+            LOG.warning(f"TON transaction {tx.tx_hash} already used for payment {existing_payment.id}")
             await self.payment_repo.mark_transaction_processed(tx.tx_hash)
             return False
 
-        await self.payment_repo.mark_transaction_processed(tx.tx_hash)
-        await self.payment_repo.update_payment_status(payment_id, "confirmed", tx.tx_hash)
+        # ATOMIC UPDATE: Mark transaction processed, update payment, and credit balance
+        from datetime import datetime
+        old_balance = user.balance
+
+        tx.processed_at = datetime.utcnow()
+        payment_locked.status = 'confirmed'
+        payment_locked.tx_hash = tx.tx_hash
+        payment_locked.confirmed_at = datetime.utcnow()
+        user.balance += payment_locked.amount
+
+        await self.session.commit()
+
+        LOG.info(f"TON payment confirmed: payment_id={payment_id}, user={user.tg_id}, "
+                f"amount={payment_locked.amount}, balance: {old_balance} → {user.balance}, "
+                f"tx_hash={tx.tx_hash}")
+
+        # Invalidate cache (tolerate Redis failures)
+        try:
+            redis = await self.payment_repo.get_redis()
+            await redis.delete(f"user:{user.tg_id}:balance")
+        except Exception as e:
+            LOG.warning(f"Redis error invalidating cache for user {user.tg_id}: {e}")
+
         await self.on_payment_confirmed(payment_id, tx.tx_hash)
-        LOG.info(f"TON payment confirmed: id={payment_id}, tx={tx.tx_hash}")
         return True
 
     async def on_payment_confirmed(self, payment_id: int, tx_hash: Optional[str] = None):

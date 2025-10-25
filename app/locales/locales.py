@@ -125,9 +125,13 @@ LOCALES = {
         'payment_cancelled': 'Платёж отменён',
         'payment_cancel_error': 'Не удалось отменить платёж',
         'payment_expired': 'Платёж истёк',
+        'payment_not_found': 'Платёж не найден или уже обработан',
+        'service_temporarily_unavailable': 'Сервис временно недоступен. Пожалуйста, попробуйте позже.',
         'active_payment_exists': 'У вас уже есть активный платёж на {amount} RUB через {method}. Хотите продолжить с ним или создать новый?',
         'continue_payment': 'Продолжить',
-        'create_new_payment': 'Создать новый'
+        'create_new_payment': 'Создать новый',
+        'payment_sent': 'Отправил оплату',
+        'payment_checking': 'Проверяем платёж...\n\nБаланс будет зачислен автоматически после подтверждения транзакции в блокчейне.\n\nОбычно это занимает 1-2 минуты.'
     },
     "en": {
         "cmd_start": "Welcome to OrbitVPN! Choose an option:",
@@ -255,9 +259,13 @@ LOCALES = {
         'payment_cancelled': 'Payment cancelled',
         'payment_cancel_error': 'Failed to cancel payment',
         'payment_expired': 'Payment expired',
+        'payment_not_found': 'Payment not found or already processed',
+        'service_temporarily_unavailable': 'Service temporarily unavailable. Please try again later.',
         'active_payment_exists': 'You already have an active payment for {amount} RUB via {method}. Continue with it or create a new one?',
         'continue_payment': 'Continue',
-        'create_new_payment': 'Create new'
+        'create_new_payment': 'Create new',
+        'payment_sent': 'Payment sent',
+        'payment_checking': 'Checking payment...\n\nBalance will be credited automatically after blockchain confirmation.\n\nUsually takes 1-2 minutes.'
     }
 }
 

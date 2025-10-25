@@ -98,7 +98,6 @@ TON_ADDRESS: Final[str] = _get_required_env("TON_ADDRESS")
 TONAPI_URL: Final[str] = _get_required_env("TONAPI_URL")
 TONAPI_KEY: Final[str] = _get_required_env("TONAPI_KEY")
 TON_EXPLORER_TX_URL: Final[str] = f"https://tonviewer.com/{TON_ADDRESS}"
-TON_RUB_RATE: Final[float] = 220.0  # May be overridden by dynamic rates
 TON_CHECK_INTERVAL: Final[int] = 30  # Blockchain polling interval in seconds
 
 # --- CryptoBot Payment Gateway Configuration ---

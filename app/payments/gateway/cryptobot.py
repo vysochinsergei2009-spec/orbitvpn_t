@@ -97,11 +97,23 @@ class CryptoBotGateway(BasePaymentGateway):
             raise ValueError(f"Failed to create CryptoBot invoice: {e}")
 
     async def check_payment(self, payment_id: int) -> bool:
-        """Check if CryptoBot invoice has been paid"""
+        """
+        Check if CryptoBot invoice has been paid.
+
+        CRITICAL FIX: Uses database locks to prevent concurrent confirmations
+        of the same payment from polling loop.
+        """
         try:
+            from app.repo.models import Payment as PaymentModel, User
+            from sqlalchemy import select
+
             payment = await self.payment_repo.get_payment(payment_id)
             if not payment:
                 LOG.warning(f"Payment {payment_id} not found")
+                return False
+
+            if payment.get('status') != 'pending':
+                LOG.debug(f"CryptoBot payment {payment_id} already {payment.get('status')}")
                 return False
 
             extra_data = payment.get('extra_data', {})
@@ -124,11 +136,58 @@ class CryptoBotGateway(BasePaymentGateway):
 
             # Check if invoice is paid
             if invoice.status == 'paid':
-                # Update payment status
+                # CRITICAL FIX: Lock payment AND user rows for atomic update
+                result = await self.session.execute(
+                    select(PaymentModel)
+                    .where(PaymentModel.id == payment_id)
+                    .with_for_update()
+                )
+                payment_locked = result.scalar_one_or_none()
+
+                if not payment_locked or payment_locked.status != 'pending':
+                    LOG.debug(f"Payment {payment_id} not pending or already confirmed")
+                    return False
+
+                # Lock user row for atomic balance update
+                result = await self.session.execute(
+                    select(User)
+                    .where(User.tg_id == payment_locked.tg_id)
+                    .with_for_update()
+                )
+                user = result.scalar_one_or_none()
+                if not user:
+                    LOG.error(f"User {payment_locked.tg_id} not found for payment {payment_id}")
+                    return False
+
+                # Check if tx_hash already set
+                if payment_locked.tx_hash is not None:
+                    LOG.warning(f"Payment {payment_id} already has tx_hash: {payment_locked.tx_hash}")
+                    return False
+
+                # ATOMIC UPDATE: Update payment status and balance
+                from datetime import datetime
+                old_balance = user.balance
                 tx_hash = f"cryptobot_{invoice_id}"
-                await self.payment_repo.update_payment_status(payment_id, "confirmed", tx_hash)
+
+                payment_locked.status = 'confirmed'
+                payment_locked.tx_hash = tx_hash
+                payment_locked.confirmed_at = datetime.utcnow()
+                user.balance += payment_locked.amount
+
+                await self.session.commit()
+
+                LOG.info(f"CryptoBot payment confirmed: payment_id={payment_id}, user={user.tg_id}, "
+                        f"amount={payment_locked.amount}, balance: {old_balance} → {user.balance}, "
+                        f"invoice={invoice_id}")
+
+                # Invalidate cache (tolerate Redis failures)
+                try:
+                    redis = await self.payment_repo.get_redis()
+                    await redis.delete(f"user:{user.tg_id}:balance")
+                except Exception as e:
+                    LOG.warning(f"Redis error invalidating cache for user {user.tg_id}: {e}")
+
                 await self.on_payment_confirmed(payment_id, tx_hash)
-                LOG.info(f"CryptoBot payment confirmed: id={payment_id}, invoice={invoice_id}")
                 return True
 
             return False

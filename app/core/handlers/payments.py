@@ -1,9 +1,11 @@
 from decimal import Decimal
+from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.filters.state import State, StatesGroup, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, ContentType, InlineKeyboardMarkup, InlineKeyboardButton
+from sqlalchemy.exc import OperationalError, TimeoutError as SQLTimeoutError
 
 from app.core.keyboards import (
     balance_kb, get_payment_methods_keyboard, get_payment_amounts_keyboard,
@@ -81,7 +83,17 @@ async def process_amount_selection(callback: CallbackQuery, t, state: FSMContext
         await callback.message.edit_text(t('enter_amount'), reply_markup=back_balance(t))
         return
 
-    await process_payment(callback, t, method_str, Decimal(amount_str))
+    # Validate preset amount
+    try:
+        amount = Decimal(amount_str)
+        if amount <= 0 or amount < 200 or amount > 100000:
+            raise ValueError("Invalid preset amount")
+    except (ValueError, TypeError) as e:
+        LOG.error(f"Invalid preset amount: {amount_str} - {e}")
+        await callback.message.edit_text(t('invalid_amount'), reply_markup=balance_kb(t))
+        return
+
+    await process_payment(callback, t, method_str, amount)
 
 
 @router.message(StateFilter(PaymentState.waiting_custom_amount))
@@ -90,6 +102,8 @@ async def process_custom_amount(message: Message, state: FSMContext, t):
 
     try:
         amount = Decimal(message.text)
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
         if amount < 200 or amount > 100000:
             raise ValueError("Amount out of range")
         if amount.as_tuple().exponent < -2:
@@ -135,8 +149,9 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
                     wallet=f"<pre><code>{result.wallet}</code></pre>",
                     comment=f'<pre>{result.comment}</pre>'
                 )
-                # Add cancel button for TON payments
+                # Add "Payment Sent" and cancel buttons for TON payments
                 kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')],
                     [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{result.payment_id}')]
                 ])
                 if is_callback:
@@ -191,6 +206,13 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
                     await msg_or_callback.message.edit_text(text, reply_markup=balance_kb(t))
                 else:
                     await msg_or_callback.answer(text)
+        except (OperationalError, SQLTimeoutError) as e:
+            LOG.error(f"Database error for user {tg_id}: {type(e).__name__}: {e}")
+            text = t('service_temporarily_unavailable')
+            if is_callback:
+                await msg_or_callback.message.edit_text(text, reply_markup=balance_kb(t))
+            else:
+                await msg_or_callback.answer(text)
         except Exception as e:
             LOG.error(f"Payment error for user {tg_id}: {type(e).__name__}: {e}")
             text = t('error_creating_payment')
@@ -269,10 +291,89 @@ async def successful_payment(message: Message, t):
     rub_amount = Decimal(stars_paid) * Decimal(str(TELEGRAM_STARS_RATE))
 
     async with get_session() as session:
-        user_repo, payment_repo = await get_repositories(session)
+        try:
+            from app.repo.models import Payment as PaymentModel, User
+            from sqlalchemy import select
 
-        if await payment_repo.mark_payment_processed_with_lock(payment_id, tg_id, rub_amount):
-            await user_repo.change_balance(tg_id, rub_amount)
+            # CRITICAL FIX: Acquire database lock FIRST to prevent race conditions
+            # Lock user row to serialize all payment confirmations for this user
+            result = await session.execute(
+                select(User).where(User.tg_id == tg_id).with_for_update()
+            )
+            user = result.scalar_one_or_none()
+            if not user:
+                LOG.error(f"User {tg_id} not found for Stars payment")
+                await message.answer(t('user_not_found'))
+                return
+
+            # Find pending Stars payment with lock
+            result = await session.execute(
+                select(PaymentModel).where(
+                    PaymentModel.tg_id == tg_id,
+                    PaymentModel.method == 'stars',
+                    PaymentModel.status == 'pending',
+                    PaymentModel.amount == rub_amount
+                ).with_for_update()
+            )
+            payment = result.scalar_one_or_none()
+
+            if not payment:
+                # Check if already confirmed with this tx_hash (duplicate webhook)
+                result = await session.execute(
+                    select(PaymentModel).where(
+                        PaymentModel.tx_hash == payment_id,
+                        PaymentModel.status == 'confirmed'
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                if existing:
+                    LOG.warning(f"Stars payment {payment_id} already confirmed (duplicate webhook)")
+                    await message.answer(t('payment_already_processed'))
+                    return
+
+                LOG.error(f"No pending Stars payment found for user {tg_id} with amount {rub_amount}")
+                await message.answer(t('payment_not_found'))
+                return
+
+            # Check if payment expired
+            if payment.expires_at and datetime.utcnow() > payment.expires_at:
+                LOG.warning(f"Stars payment {payment.id} expired (expires_at: {payment.expires_at})")
+                payment.status = 'expired'
+                await session.commit()
+                await message.answer(t('payment_expired'))
+                return
+
+            # Check if tx_hash already used (should be caught by unique constraint, but double-check)
+            if payment.tx_hash is not None:
+                LOG.warning(f"Payment {payment.id} already has tx_hash: {payment.tx_hash}")
+                await message.answer(t('payment_already_processed'))
+                return
+
+            # Store old balance for logging
+            old_balance = user.balance
+
+            # ATOMIC UPDATE: Update payment status and balance in single transaction
+            payment.status = 'confirmed'
+            payment.tx_hash = payment_id
+            payment.confirmed_at = datetime.utcnow()
+
+            user.balance += rub_amount
+            new_balance = user.balance
+
+            # Commit transaction atomically
+            await session.commit()
+
+            LOG.info(f"Stars payment confirmed: payment_id={payment.id}, user={tg_id}, "
+                    f"amount={rub_amount}, balance: {old_balance} → {new_balance}, tx_hash={payment_id}")
+
+            # Invalidate cache after successful commit (tolerate Redis failures)
+            try:
+                user_repo, _ = await get_repositories(session)
+                redis = await user_repo.get_redis()
+                await redis.delete(f"user:{tg_id}:balance")
+            except Exception as redis_err:
+                LOG.warning(f"Redis error invalidating cache for user {tg_id}: {redis_err}")
+                # Don't fail payment confirmation - balance was updated successfully
 
             has_active_sub = await user_repo.has_active_subscription(tg_id)
 
@@ -280,8 +381,12 @@ async def successful_payment(message: Message, t):
                 t('payment_success', amount=float(rub_amount)),
                 reply_markup=payment_success_actions(t, has_active_sub)
             )
-        else:
-            await message.answer(t('payment_already_processed'))
+
+        except Exception as e:
+            await session.rollback()
+            LOG.error(f"Error confirming Stars payment for user {tg_id}: {type(e).__name__}: {e}")
+            await message.answer(t('error_creating_payment'))
+            raise
 
 
 @router.callback_query(F.data.startswith('cancel_payment_'))
@@ -293,7 +398,7 @@ async def cancel_payment_callback(callback: CallbackQuery, t):
         payment_id = int(callback.data.replace('cancel_payment_', ''))
 
         async with get_session() as session:
-            payment_repo = get_repositories(session)[1]
+            _, payment_repo = await get_repositories(session)
 
             # Cancel the payment
             success = await payment_repo.cancel_payment(payment_id)
@@ -325,7 +430,7 @@ async def continue_payment_callback(callback: CallbackQuery, t):
         payment_id = int(callback.data.replace('continue_payment_', ''))
 
         async with get_session() as session:
-            payment_repo = get_repositories(session)[1]
+            _, payment_repo = await get_repositories(session)
             payment = await payment_repo.get_payment(payment_id)
 
             if not payment or payment['status'] != 'pending':
@@ -346,6 +451,7 @@ async def continue_payment_callback(callback: CallbackQuery, t):
                     comment=f'<pre>{payment["comment"]}</pre>'
                 )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{payment_id}')],
                     [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{payment_id}')]
                 ])
                 await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -420,6 +526,7 @@ async def force_payment_callback(callback: CallbackQuery, t):
                     comment=f'<pre>{result.comment}</pre>'
                 )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')],
                     [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{result.payment_id}')]
                 ])
                 await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -444,3 +551,59 @@ async def force_payment_callback(callback: CallbackQuery, t):
             t('error_creating_payment'),
             reply_markup=balance_kb(t)
         )
+
+
+@router.callback_query(F.data.startswith('payment_sent_'))
+async def payment_sent_callback(callback: CallbackQuery, t):
+    """Handle 'Payment Sent' button - check payment immediately"""
+    await safe_answer_callback(callback, t('payment_checking'), show_alert=True)
+
+    tg_id = callback.from_user.id
+    payment_id = int(callback.data.replace('payment_sent_', ''))
+
+    async with get_session() as session:
+        try:
+            redis_client = await get_redis()
+            manager = PaymentManager(session, redis_client)
+
+            # Get payment details first
+            _, payment_repo = await get_repositories(session)
+            payment = await payment_repo.get_payment(payment_id)
+
+            if not payment:
+                raise ValueError(f"Payment {payment_id} not found")
+
+            # Check payment immediately when user clicks button
+            confirmed = await manager.check_payment(payment_id)
+
+            # Get updated balance
+            user_repo, _ = await get_repositories(session)
+            balance = await get_user_balance(user_repo, tg_id)
+            has_active_sub = await user_repo.has_active_subscription(tg_id)
+
+            if confirmed:
+                # Payment confirmed successfully
+                text = t('payment_success', amount=float(payment['amount'])) + "\n\n" + t('balance_text', balance=balance)
+            else:
+                # Payment not yet confirmed
+                text = t('payment_not_found') + "\n\n" + t('balance_text', balance=balance)
+
+            if has_active_sub:
+                from .utils import format_expire_date
+                sub_end = await user_repo.get_subscription_end(tg_id)
+                expire_date = format_expire_date(sub_end)
+                text += f"\n\n{t('subscription_active_until', expire_date=expire_date)}"
+            else:
+                from config import PLANS
+                cheapest = min(PLANS.values(), key=lambda x: x['price'])
+                text += f"\n\n{t('subscription_from', price=cheapest['price'])}"
+
+            await callback.message.edit_text(text, reply_markup=balance_kb(t))
+
+        except Exception as e:
+            LOG.error(f"Error checking payment {payment_id}: {e}")
+            # Fallback to showing balance screen
+            user_repo, _ = await get_repositories(session)
+            balance = await get_user_balance(user_repo, tg_id)
+            text = t('balance_text', balance=balance)
+            await callback.message.edit_text(text, reply_markup=balance_kb(t))

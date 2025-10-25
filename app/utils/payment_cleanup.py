@@ -1,8 +1,3 @@
-"""
-Background task for cleaning up expired and old payments.
-This prevents database bloat from pending payments that were never completed.
-"""
-
 import asyncio
 import logging
 from datetime import datetime
@@ -14,14 +9,7 @@ LOG = logging.getLogger(__name__)
 
 
 class PaymentCleanupTask:
-    """Background task to expire old payments and clean up database"""
-
-    def __init__(self, check_interval_seconds: int = 300, cleanup_days: int = 7):
-        """
-        Args:
-            check_interval_seconds: How often to check for expired payments (default: 5 minutes)
-            cleanup_days: Delete expired/cancelled payments older than this many days (default: 7)
-        """
+    def __init__(self, check_interval_seconds: int = 3600 * 2, cleanup_days: int = 7):
         self.check_interval = check_interval_seconds
         self.cleanup_days = cleanup_days
         self.task: asyncio.Task = None

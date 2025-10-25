@@ -32,29 +32,84 @@ class UserRepository(BaseRepository):
     # Balance
     # ----------------------------
     async def get_balance(self, tg_id: int) -> Decimal:
-        redis = await self.get_redis()
-        cached = await redis.get(f"user:{tg_id}:balance")
-        if cached:
-            return Decimal(cached)
+        """
+        Get user balance with Redis caching and automatic fallback to database.
 
+        CRITICAL: Redis failures are handled gracefully - if Redis is unavailable,
+        the method falls back to database without failing.
+        """
+        redis = await self.get_redis()
+
+        # Try to get from cache, but don't fail if Redis is down
+        try:
+            cached = await redis.get(f"user:{tg_id}:balance")
+            if cached:
+                return Decimal(cached)
+        except Exception as e:
+            LOG.warning(f"Redis error reading balance for user {tg_id}: {e}")
+            # Continue to database fallback
+
+        # Fallback to database
         result = await self.session.execute(select(User.balance).filter_by(tg_id=tg_id))
         balance = result.scalar() or Decimal("0.0")
 
-        await redis.setex(f"user:{tg_id}:balance", CACHE_TTL_BALANCE, str(balance))
+        # Try to cache the result, but don't fail if Redis is down
+        try:
+            await redis.setex(f"user:{tg_id}:balance", CACHE_TTL_BALANCE, str(balance))
+        except Exception as e:
+            LOG.warning(f"Redis error caching balance for user {tg_id}: {e}")
+            # Continue anyway - database read succeeded
+
         return balance
 
     async def change_balance(self, tg_id: int, amount: Decimal) -> Decimal:
-        redis = await self.get_redis()
-        result = await self.session.execute(
-            update(User)
-            .where(User.tg_id == tg_id)
-            .values(balance=User.balance + amount)
-            .returning(User.balance)
-        )
-        await self.session.commit()
-        new_balance = result.scalar() or Decimal("0.0")
+        """
+        Change user balance atomically with SELECT FOR UPDATE lock.
 
-        await redis.setex(f"user:{tg_id}:balance", CACHE_TTL_BALANCE, str(new_balance))
+        CRITICAL: This method now uses row-level locking to prevent lost updates
+        from concurrent balance modifications (race conditions).
+
+        Returns:
+            New balance after change
+
+        Raises:
+            ValueError: If user not found or insufficient balance
+        """
+        redis = await self.get_redis()
+
+        # CRITICAL FIX: Lock user row BEFORE reading balance
+        # This prevents race conditions where two concurrent updates both read
+        # the same balance value and one update gets lost
+        result = await self.session.execute(
+            select(User)
+            .where(User.tg_id == tg_id)
+            .with_for_update()  # Acquire exclusive lock on row
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise ValueError(f"User {tg_id} not found")
+
+        old_balance = user.balance
+        new_balance = old_balance + amount
+
+        # Prevent negative balance
+        if new_balance < 0:
+            raise ValueError(f"Insufficient balance: {old_balance} + {amount} = {new_balance}")
+
+        # Update locked row
+        user.balance = new_balance
+        await self.session.commit()
+
+        LOG.info(f"Balance changed for user {tg_id}: {old_balance} → {new_balance} ({amount:+.2f})")
+
+        # Invalidate cache after successful commit (tolerate Redis failures)
+        try:
+            await redis.delete(f"user:{tg_id}:balance")
+        except Exception as e:
+            LOG.warning(f"Redis error invalidating balance cache for user {tg_id}: {e}")
+            # Don't fail the transaction - balance was successfully updated in database
+
         return new_balance
 
     # ----------------------------
@@ -343,6 +398,7 @@ class UserRepository(BaseRepository):
             raise ValueError("Invalid username format")
 
         # Verify user has active subscription and hasn't reached config limit
+        # Use SELECT FOR UPDATE to prevent race conditions from double-clicks
         async with get_session() as session:
             result = await session.execute(
                 select(User).where(User.tg_id == tg_id).with_for_update()
@@ -352,7 +408,10 @@ class UserRepository(BaseRepository):
                 raise ValueError("No active subscription or subscription expired")
 
             result = await session.execute(
-                select(func.count(Config.id)).where(Config.tg_id == tg_id, Config.deleted == False)
+                select(func.count(Config.id)).where(
+                    Config.tg_id == tg_id,
+                    Config.deleted == False
+                )
             )
             count = result.scalar()
             if count >= 1:
@@ -411,6 +470,16 @@ class UserRepository(BaseRepository):
                 await marzban_client.remove_user(username, instance_id)
                 raise ValueError("Subscription expired during config creation")
 
+            # Lock the user row to prevent concurrent config creation
+            result = await session.execute(
+                select(User).where(User.tg_id == tg_id).with_for_update()
+            )
+            user_lock = result.scalar_one_or_none()
+            if not user_lock:
+                await marzban_client.remove_user(username, instance_id)
+                raise ValueError("User not found")
+
+            # Check config count again with lock to prevent race condition
             result = await session.execute(
                 select(func.count(Config.id)).where(Config.tg_id == tg_id, Config.deleted == False)
             )
