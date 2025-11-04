@@ -120,6 +120,10 @@ LOCALES = {
         'cryptobot_payment_intro': 'Оплата через CryptoBot',
         'cryptobot_amount': 'Сумма к оплате: {amount} RUB',
         'cryptobot_click_button': 'Нажмите кнопку ниже для оплаты',
+        # YooKassa payment strings
+        'yookassa_payment_intro': 'Оплата через YooKassa',
+        'yookassa_amount': 'Сумма к оплате: {amount} RUB',
+        'yookassa_click_button': 'Нажмите кнопку ниже для оплаты',
         # Payment cancellation
         'cancel_payment': 'Отменить платёж',
         'payment_cancelled': 'Платёж отменён',
@@ -132,6 +136,20 @@ LOCALES = {
         'create_new_payment': 'Создать новый',
         'payment_sent': 'Отправил оплату',
         'payment_checking': 'Проверяем платёж...\n\nБаланс будет зачислен автоматически после подтверждения транзакции в блокчейне.\n\nОбычно это занимает 1-2 минуты.',
+        # Admin panel strings
+        'admin': 'Админ',
+        'admin_panel_welcome': '🔧 Панель администратора\n\nВыберите раздел:',
+        'admin_stats': 'Статистика',
+        'admin_users': 'Пользователи',
+        'admin_payments': 'Платежи',
+        'admin_servers': 'Серверы',
+        'admin_broadcast': 'Рассылка',
+        'access_denied': 'Доступ запрещён',
+        'admin_stats_placeholder': '📊 Статистика бота\n\n[В разработке]\n\nЗдесь будет:\n- Общее количество пользователей\n- Активные подписки\n- Доход за период\n- Конверсия',
+        'admin_users_placeholder': '👥 Управление пользователями\n\n[В разработке]\n\nЗдесь будет:\n- Поиск пользователей\n- Выдача/отзыв подписок\n- Блокировка пользователей\n- История активности',
+        'admin_payments_placeholder': '💰 Статистика платежей\n\n[В разработке]\n\nЗдесь будет:\n- Последние платежи\n- Статистика по методам оплаты\n- Неудачные платежи\n- Общий доход',
+        'admin_servers_placeholder': '🖥 Статус серверов\n\n[В разработке]\n\nЗдесь будет:\n- Список Marzban серверов\n- Загрузка серверов\n- Активные конфигурации\n- Управление серверами',
+        'admin_broadcast_placeholder': '📢 Рассылка сообщений\n\n[В разработке]\n\nЗдесь будет:\n- Отправка сообщений всем пользователям\n- Отправка определённым группам\n- Статистика доставки',
     },
     "en": {
         "cmd_start": "Welcome to OrbitVPN! Choose an option:",
@@ -254,6 +272,10 @@ LOCALES = {
         'cryptobot_payment_intro': 'Payment via CryptoBot',
         'cryptobot_amount': 'Amount to pay: {amount} RUB',
         'cryptobot_click_button': 'Click the button below to pay',
+        # YooKassa payment strings
+        'yookassa_payment_intro': 'Payment via YooKassa',
+        'yookassa_amount': 'Amount to pay: {amount} RUB',
+        'yookassa_click_button': 'Click the button below to pay',
         # Payment cancellation
         'cancel_payment': 'Cancel payment',
         'payment_cancelled': 'Payment cancelled',
@@ -266,6 +288,20 @@ LOCALES = {
         'create_new_payment': 'Create new',
         'payment_sent': 'Payment sent',
         'payment_checking': 'Checking payment...\n\nBalance will be credited automatically after blockchain confirmation.\n\nUsually takes 1-2 minutes.',
+        # Admin panel strings
+        'admin': 'Admin',
+        'admin_panel_welcome': '🔧 Admin Panel\n\nSelect a section:',
+        'admin_stats': 'Statistics',
+        'admin_users': 'Users',
+        'admin_payments': 'Payments',
+        'admin_servers': 'Servers',
+        'admin_broadcast': 'Broadcast',
+        'access_denied': 'Access denied',
+        'admin_stats_placeholder': '📊 Bot Statistics\n\n[Under development]\n\nWill include:\n- Total users\n- Active subscriptions\n- Revenue by period\n- Conversion rates',
+        'admin_users_placeholder': '👥 User Management\n\n[Under development]\n\nWill include:\n- User search\n- Grant/revoke subscriptions\n- Block users\n- Activity history',
+        'admin_payments_placeholder': '💰 Payment Statistics\n\n[Under development]\n\nWill include:\n- Recent payments\n- Statistics by payment method\n- Failed payments\n- Total revenue',
+        'admin_servers_placeholder': '🖥 Server Status\n\n[Under development]\n\nWill include:\n- Marzban server list\n- Server load\n- Active configurations\n- Server management',
+        'admin_broadcast_placeholder': '📢 Message Broadcast\n\n[Under development]\n\nWill include:\n- Send messages to all users\n- Send to specific groups\n- Delivery statistics',
     }
 }
 

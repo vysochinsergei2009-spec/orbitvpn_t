@@ -27,7 +27,7 @@ async def cmd_start(message: Message, t):
         if is_new_user:
             await user_repo.buy_subscription(tg_id, days=FREE_TRIAL_DAYS, price=0.0)
 
-        await message.answer(t("cmd_start"), reply_markup=main_kb(t))
+        await message.answer(t("cmd_start"), reply_markup=main_kb(t, user_id=tg_id))
 
         if is_new_user:
             await message.answer(t("free_trial_activated"))
@@ -36,7 +36,8 @@ async def cmd_start(message: Message, t):
 @router.callback_query(F.data == 'back_main')
 async def back_to_main(callback: CallbackQuery, t):
     await safe_answer_callback(callback)
-    await callback.message.edit_text(t('welcome'), reply_markup=main_kb(t))
+    tg_id = callback.from_user.id
+    await callback.message.edit_text(t('welcome'), reply_markup=main_kb(t, user_id=tg_id))
 
 
 @router.callback_query(F.data == 'referral')

@@ -160,7 +160,41 @@ class PaymentRepository(BaseRepository):
         await self.session.commit()
 
     async def cancel_payment(self, payment_id: int) -> bool:
-        """Cancel a pending payment"""
+        """
+        Cancel a pending payment
+
+        IMPORTANT: For YooKassa/CryptoBot, checks if payment is already succeeded
+        before cancellation to prevent loss of user funds
+        """
+        # Get payment details first
+        result = await self.session.execute(
+            select(PaymentModel).where(PaymentModel.id == payment_id)
+        )
+        payment = result.scalar_one_or_none()
+
+        if not payment or payment.status != 'pending':
+            return False
+
+        # For YooKassa/CryptoBot, check if payment is already succeeded on gateway side
+        if payment.method in ['yookassa', 'cryptobot']:
+            extra_data = payment.extra_data or {}
+
+            if payment.method == 'yookassa':
+                yookassa_payment_id = extra_data.get('yookassa_payment_id')
+                if yookassa_payment_id:
+                    # Check if payment is succeeded in YooKassa
+                    try:
+                        from yookassa import Payment as YooKassaPayment
+                        yookassa_payment = YooKassaPayment.find_one(yookassa_payment_id)
+                        if yookassa_payment and yookassa_payment.status == 'succeeded':
+                            LOG.warning(f"Cannot cancel payment {payment_id}: already succeeded in YooKassa")
+                            return False
+                    except Exception as e:
+                        LOG.error(f"Error checking YooKassa payment status: {e}")
+                        # Don't cancel if we can't verify
+                        return False
+
+        # Safe to cancel
         stmt = update(PaymentModel).where(
             PaymentModel.id == payment_id,
             PaymentModel.status == 'pending'

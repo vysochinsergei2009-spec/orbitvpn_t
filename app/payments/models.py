@@ -8,6 +8,7 @@ class PaymentMethod(str, Enum):
     TON = "ton"
     STARS = "stars"
     CRYPTOBOT = "cryptobot"
+    YOOKASSA = "yookassa"
 
 class PaymentStatus(str, Enum):
     PENDING = "pending"

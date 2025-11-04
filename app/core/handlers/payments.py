@@ -151,10 +151,9 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
                     wallet=f"<pre><code>{result.wallet}</code></pre>",
                     comment=f'<pre>{result.comment}</pre>'
                 )
-                # Add "Payment Sent" and cancel buttons for TON payments
+                # Add "Payment Sent" button for TON payments
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')],
-                    [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{result.payment_id}')]
+                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')]
                 ])
                 if is_callback:
                     await msg_or_callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -163,8 +162,7 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
 
             elif method == PaymentMethod.STARS and result.url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('pay_button'), url=result.url)],
-                    [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{result.payment_id}')]
+                    [InlineKeyboardButton(text=t('pay_button'), url=result.url)]
                 ])
                 if is_callback:
                     await msg_or_callback.message.edit_text(result.text, reply_markup=kb)
@@ -173,8 +171,17 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
 
             elif method == PaymentMethod.CRYPTOBOT and result.pay_url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=t('pay_button'), url=result.pay_url)]
+                ])
+                if is_callback:
+                    await msg_or_callback.message.edit_text(result.text, reply_markup=kb)
+                else:
+                    await msg_or_callback.answer(result.text, reply_markup=kb)
+
+            elif method == PaymentMethod.YOOKASSA and result.pay_url:
+                kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text=t('pay_button'), url=result.pay_url)],
-                    [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{result.payment_id}')]
+                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')]
                 ])
                 if is_callback:
                     await msg_or_callback.message.edit_text(result.text, reply_markup=kb)
@@ -391,38 +398,6 @@ async def successful_payment(message: Message, t):
             raise
 
 
-@router.callback_query(F.data.startswith('cancel_payment_'))
-async def cancel_payment_callback(callback: CallbackQuery, t):
-    """Handle payment cancellation"""
-    await safe_answer_callback(callback)
-
-    try:
-        payment_id = int(callback.data.replace('cancel_payment_', ''))
-
-        async with get_session() as session:
-            _, payment_repo = await get_repositories(session)
-
-            # Cancel the payment
-            success = await payment_repo.cancel_payment(payment_id)
-
-            if success:
-                await callback.message.edit_text(
-                    t('payment_cancelled'),
-                    reply_markup=balance_kb(t)
-                )
-            else:
-                await callback.message.edit_text(
-                    t('payment_cancel_error'),
-                    reply_markup=balance_kb(t)
-                )
-    except Exception as e:
-        LOG.error(f"Error cancelling payment: {e}")
-        await callback.message.edit_text(
-            t('payment_cancel_error'),
-            reply_markup=balance_kb(t)
-        )
-
-
 @router.callback_query(F.data.startswith('continue_payment_'))
 async def continue_payment_callback(callback: CallbackQuery, t):
     """Continue with existing payment"""
@@ -453,8 +428,7 @@ async def continue_payment_callback(callback: CallbackQuery, t):
                     comment=f'<pre>{payment["comment"]}</pre>'
                 )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{payment_id}')],
-                    [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{payment_id}')]
+                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{payment_id}')]
                 ])
                 await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
@@ -474,10 +448,40 @@ async def continue_payment_callback(callback: CallbackQuery, t):
                         + t("cryptobot_click_button")
                     )
                     kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text=t('pay_button'), url=pay_url)],
-                        [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{payment_id}')]
+                        [InlineKeyboardButton(text=t('pay_button'), url=pay_url)]
                     ])
                     await callback.message.edit_text(text, reply_markup=kb)
+                else:
+                    await callback.message.edit_text(t('error_creating_payment'), reply_markup=balance_kb(t))
+
+            elif method == PaymentMethod.YOOKASSA:
+                extra_data = payment.get('extra_data', {})
+                yookassa_payment_id = extra_data.get('yookassa_payment_id') if extra_data else None
+
+                if yookassa_payment_id:
+                    # Reconstruct payment URL from YooKassa
+                    # Note: We need to fetch the payment URL from YooKassa API
+                    from yookassa import Payment as YooKassaPayment
+                    from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY
+                    from yookassa import Configuration
+
+                    Configuration.configure(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)
+                    yookassa_payment = YooKassaPayment.find_one(yookassa_payment_id)
+
+                    if yookassa_payment and yookassa_payment.confirmation:
+                        pay_url = yookassa_payment.confirmation.confirmation_url
+                        text = (
+                            t("yookassa_payment_intro") + "\n\n"
+                            + t("yookassa_amount", amount=payment['amount']) + "\n\n"
+                            + t("yookassa_click_button")
+                        )
+                        kb = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text=t('pay_button'), url=pay_url)],
+                            [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{payment_id}')]
+                        ])
+                        await callback.message.edit_text(text, reply_markup=kb)
+                    else:
+                        await callback.message.edit_text(t('error_creating_payment'), reply_markup=balance_kb(t))
                 else:
                     await callback.message.edit_text(t('error_creating_payment'), reply_markup=balance_kb(t))
 
@@ -528,22 +532,26 @@ async def force_payment_callback(callback: CallbackQuery, t):
                     comment=f'<pre>{result.comment}</pre>'
                 )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')],
-                    [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{result.payment_id}')]
+                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')]
                 ])
                 await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
             elif method == PaymentMethod.STARS and result.url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('pay_button'), url=result.url)],
-                    [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{result.payment_id}')]
+                    [InlineKeyboardButton(text=t('pay_button'), url=result.url)]
                 ])
                 await callback.message.edit_text(result.text, reply_markup=kb)
 
             elif method == PaymentMethod.CRYPTOBOT and result.pay_url:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=t('pay_button'), url=result.pay_url)]
+                ])
+                await callback.message.edit_text(result.text, reply_markup=kb)
+
+            elif method == PaymentMethod.YOOKASSA and result.pay_url:
+                kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text=t('pay_button'), url=result.pay_url)],
-                    [InlineKeyboardButton(text=t('cancel_payment'), callback_data=f'cancel_payment_{result.payment_id}')]
+                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')]
                 ])
                 await callback.message.edit_text(result.text, reply_markup=kb)
 

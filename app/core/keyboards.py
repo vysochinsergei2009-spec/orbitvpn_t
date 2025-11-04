@@ -4,7 +4,7 @@ from typing import Any
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import PLANS
+from config import ADMIN_TG_ID, PLANS
 
 
 def _build_keyboard(
@@ -33,13 +33,20 @@ def qr_delete_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
     ])
 
 
-def main_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
-    return _build_keyboard([
+def main_kb(t: Callable[[str], str], user_id: int | None = None) -> InlineKeyboardMarkup:
+    buttons = [
         {'text': t('my_vpn'), 'callback_data': 'myvpn'},
         {'text': t('balance'), 'callback_data': 'balance'},
         {'text': t('settings'), 'callback_data': 'settings'},
-        {'text': t('help'), 'url': 'https://t.me/chnddy'},
-    ], adjust=[1, 1, 2])
+    ]
+
+    # Show Admin button for admin, Help for others
+    if user_id and user_id == ADMIN_TG_ID:
+        buttons.append({'text': t('admin'), 'callback_data': 'admin_panel'})
+    else:
+        buttons.append({'text': t('help'), 'url': 'https://t.me/chnddy'})
+
+    return _build_keyboard(buttons, adjust=[1, 1, 2])
 
 
 def balance_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
@@ -128,7 +135,8 @@ def get_payment_methods_keyboard(t: Callable[[str], str]) -> InlineKeyboardMarku
     return _build_keyboard([
         {'text': 'TON', 'callback_data': 'select_method_ton'},
         {'text': t('pm_stars'), 'callback_data': 'select_method_stars'},
-        {'text': 'CryptoBot', 'callback_data': 'select_method_cryptobot'},
+        {'text': 'CryptoBot (USDT)', 'callback_data': 'select_method_cryptobot'},
+        {'text': 'YooKassa (RUB)', 'callback_data': 'select_method_yookassa'},
         {'text': t('back'), 'callback_data': 'balance'},
     ], adjust=1)
 
@@ -169,3 +177,15 @@ def payment_success_actions(t: Callable[[str], str], has_active_sub: bool) -> In
             {'text': t('buy_sub'), 'callback_data': 'buy_sub'},
             {'text': t('back_main'), 'callback_data': 'back_main'},
         ])
+
+
+def admin_panel_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
+    """Admin panel keyboard with various management options"""
+    return _build_keyboard([
+        {'text': t('admin_stats'), 'callback_data': 'admin_stats'},
+        {'text': t('admin_users'), 'callback_data': 'admin_users'},
+        {'text': t('admin_payments'), 'callback_data': 'admin_payments'},
+        {'text': t('admin_servers'), 'callback_data': 'admin_servers'},
+        {'text': t('admin_broadcast'), 'callback_data': 'admin_broadcast'},
+        {'text': t('back_main'), 'callback_data': 'back_main'},
+    ], adjust=[2, 2, 1, 1])

@@ -54,14 +54,19 @@ def _load_plans(file_path: str = "plans.json") -> dict[str, Any]:
 
 # --- Telegram Bot Configuration ---
 BOT_TOKEN: Final[str] = _get_required_env("BOT_TOKEN")
+ADMIN_TG_ID: Final[int] = _get_env_int("ADMIN_TG_ID", 0)  # Admin Telegram ID for admin panel access
 
 bot: Final[Bot] = Bot(token=BOT_TOKEN)
 
 # --- Installation Guide URLs ---
-INSTALL_GUIDE_BASE_URL: Final[str] = "https://install.orbitcorp.space:8443"
+INSTALL_GUIDE_BASE_URL: Final[str] = "https://orbitcorp.space"
 INSTALL_GUIDE_URLS: Final[dict[str, str]] = {
-    "ru": f"{INSTALL_GUIDE_BASE_URL}/ru.html",
-    "en": f"{INSTALL_GUIDE_BASE_URL}/en.html",
+    "ru": f"{INSTALL_GUIDE_BASE_URL}/install/ru",
+    "en": f"{INSTALL_GUIDE_BASE_URL}/install/en",
+}
+PRIVACY_POLICY_URLS: Final[dict[str, str]] = {
+    "ru": f"{INSTALL_GUIDE_BASE_URL}/policy/ru",
+    "en": f"{INSTALL_GUIDE_BASE_URL}/policy/en",
 }
 
 # --- Logging Configuration ---
@@ -104,8 +109,20 @@ TON_CHECK_INTERVAL: Final[int] = 30  # Blockchain polling interval in seconds
 CRYPTOBOT_TOKEN: Final[str] = os.getenv("CRYPTOBOT_TOKEN", "")  # Optional: will be set in .env
 CRYPTOBOT_TESTNET: Final[bool] = os.getenv("CRYPTOBOT_TESTNET", "false").lower() == "true"
 
+# --- YooKassa Payment Gateway Configuration ---
+# Production credentials
+YOOKASSA_SHOP_ID: Final[str] = os.getenv("YOOKASSA_SHOP_ID", "")
+YOOKASSA_SECRET_KEY: Final[str] = os.getenv("YOOKASSA_SECRET_KEY", "")
+
+# Test credentials (separate test shop)
+YOOKASSA_TEST_SHOP_ID: Final[str] = os.getenv("YOOKASSA_TEST_SHOP_ID", "")
+YOOKASSA_TEST_SECRET_KEY: Final[str] = os.getenv("YOOKASSA_TEST_SECRET_KEY", "")
+
+# Mode selector
+YOOKASSA_TESTNET: Final[bool] = os.getenv("YOOKASSA_TESTNET", "false").lower() == "true"
+
 # --- Payment Configuration ---
-PAYMENT_TIMEOUT_MINUTES: Final[int] = 10
+PAYMENT_TIMEOUT_MINUTES: Final[int] = 15  # Auto-expire pending payments after 15 minutes
 TELEGRAM_STARS_RATE: Final[float] = 1.35  # Stars to RUB conversion
 
 # --- Business Logic Constants ---

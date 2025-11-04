@@ -8,6 +8,7 @@ from app.payments.gateway.base import BasePaymentGateway
 from app.payments.gateway.ton import TonGateway
 from app.payments.gateway.stars import TelegramStarsGateway
 from app.payments.gateway.cryptobot import CryptoBotGateway
+from app.payments.gateway.yookassa import YooKassaGateway
 from app.repo.payments import PaymentRepository
 from app.repo.user import UserRepository
 from app.repo.db import get_session
@@ -25,6 +26,7 @@ class PaymentManager:
             PaymentMethod.TON: TonGateway(session, redis_client),
             PaymentMethod.STARS: TelegramStarsGateway(bot, session, redis_client),
             PaymentMethod.CRYPTOBOT: CryptoBotGateway(session, redis_client),
+            PaymentMethod.YOOKASSA: YooKassaGateway(session, redis_client),
         }
         self.user_repo = UserRepository(session, redis_client)
         self.polling_task: Optional[asyncio.Task] = None
@@ -92,7 +94,7 @@ class PaymentManager:
             )
 
             LOG.info(f"Payment created: {method} for user {tg_id}, amount {amount}, id={payment_id}")
-            if method in [PaymentMethod.TON, PaymentMethod.CRYPTOBOT]:
+            if method in [PaymentMethod.TON, PaymentMethod.CRYPTOBOT, PaymentMethod.YOOKASSA]:
                 await self.start_polling_if_needed()
             return result
         except Exception as e:
@@ -116,22 +118,41 @@ class PaymentManager:
     async def run_polling_loop(self):
         while True:
             try:
-                # Check TON payments
-                ton_pendings = await self.get_pending_payments(PaymentMethod.TON)
-                if ton_pendings:
-                    from app.utils.updater import TonTransactionsUpdater
-                    updater = TonTransactionsUpdater()
-                    await updater.run_once()
+                # Create new session for each polling iteration
+                async with get_session() as session:
+                    redis_client = await get_redis()
+                    temp_payment_repo = PaymentRepository(session, redis_client)
 
-                # Check CryptoBot payments
-                cryptobot_pendings = await self.get_pending_payments(PaymentMethod.CRYPTOBOT)
-                if cryptobot_pendings:
-                    for payment in cryptobot_pendings:
-                        await self.check_payment(payment['id'])
+                    # Check TON payments
+                    ton_pendings = await temp_payment_repo.get_pending_payments(PaymentMethod.TON.value)
+                    if ton_pendings:
+                        from app.utils.updater import TonTransactionsUpdater
+                        updater = TonTransactionsUpdater()
+                        await updater.run_once()
 
-                # If no pending payments, stop polling
-                if not ton_pendings and not cryptobot_pendings:
-                    break
+                    # Check CryptoBot payments
+                    cryptobot_pendings = await temp_payment_repo.get_pending_payments(PaymentMethod.CRYPTOBOT.value)
+                    if cryptobot_pendings:
+                        for payment in cryptobot_pendings:
+                            # Create new session for each check
+                            async with get_session() as check_session:
+                                check_redis = await get_redis()
+                                check_gateway = self.gateways[PaymentMethod.CRYPTOBOT].__class__(check_session, check_redis)
+                                await check_gateway.check_payment(payment['id'])
+
+                    # Check YooKassa payments
+                    yookassa_pendings = await temp_payment_repo.get_pending_payments(PaymentMethod.YOOKASSA.value)
+                    if yookassa_pendings:
+                        for payment in yookassa_pendings:
+                            # Create new session for each check
+                            async with get_session() as check_session:
+                                check_redis = await get_redis()
+                                check_gateway = self.gateways[PaymentMethod.YOOKASSA].__class__(check_session, check_redis)
+                                await check_gateway.check_payment(payment['id'])
+
+                    # If no pending payments, stop polling
+                    if not ton_pendings and not cryptobot_pendings and not yookassa_pendings:
+                        break
             except Exception as e:
                 LOG.error(f"Polling loop error: {type(e).__name__}: {e}")
             await asyncio.sleep(60)
