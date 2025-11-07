@@ -59,7 +59,7 @@ ADMIN_TG_ID: Final[int] = _get_env_int("ADMIN_TG_ID", 0)  # Admin Telegram ID fo
 bot: Final[Bot] = Bot(token=BOT_TOKEN)
 
 # --- Installation Guide URLs ---
-INSTALL_GUIDE_BASE_URL: Final[str] = "https://orbitcorp.space"
+INSTALL_GUIDE_BASE_URL: Final[str] = "https://orbitcorp.space:2053"
 INSTALL_GUIDE_URLS: Final[dict[str, str]] = {
     "ru": f"{INSTALL_GUIDE_BASE_URL}/install/ru",
     "en": f"{INSTALL_GUIDE_BASE_URL}/install/en",
