@@ -56,6 +56,17 @@ def _load_plans(file_path: str = "plans.json") -> dict[str, Any]:
 BOT_TOKEN: Final[str] = _get_required_env("BOT_TOKEN")
 bot: Final[Bot] = Bot(token=BOT_TOKEN)
 
+# --- Installation Guide URLs ---
+INSTALL_GUIDE_BASE_URL: Final[str] = "https://orbitcorp.space:2053"
+INSTALL_GUIDE_URLS: Final[dict[str, str]] = {
+    "ru": f"{INSTALL_GUIDE_BASE_URL}/install/ru",
+    "en": f"{INSTALL_GUIDE_BASE_URL}/install/en",
+}
+PRIVACY_POLICY_URLS: Final[dict[str, str]] = {
+    "ru": f"{INSTALL_GUIDE_BASE_URL}/policy/ru",
+    "en": f"{INSTALL_GUIDE_BASE_URL}/policy/en",
+}
+
 # --- Logging Configuration ---
 IS_LOGGING: Final[bool] = True
 LOG_LEVEL: Final[str] = "DEBUG"  # Options: "INFO", "DEBUG", "ERROR"
