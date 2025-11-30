@@ -1,6 +1,7 @@
 import logging
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
+from aiogram import Bot
 from app.payments.gateway.base import BasePaymentGateway
 from app.payments.models import PaymentResult, PaymentMethod
 from app.repo.payments import PaymentRepository
@@ -11,9 +12,10 @@ LOG = logging.getLogger(__name__)
 class TonGateway(BasePaymentGateway):
     requires_polling = True
 
-    def __init__(self, session, redis_client=None):
+    def __init__(self, session, redis_client=None, bot: Optional[Bot] = None):
         self.session = session
         self.payment_repo = PaymentRepository(session, redis_client)
+        self.bot = bot
 
     async def create_payment(
         self,
@@ -77,8 +79,16 @@ class TonGateway(BasePaymentGateway):
             LOG.debug(f"TON payment {payment_id} incomplete: {payment}")
             return False
 
-        if payment.get('status') != 'pending':
-            LOG.debug(f"TON payment {payment_id} already {payment.get('status')}")
+        # CRITICAL FIX: Allow confirming expired payments if transaction found on blockchain
+        # This prevents loss of user funds when payment expires locally but succeeds on chain
+        current_status = payment.get('status')
+        if current_status == 'confirmed':
+            LOG.debug(f"TON payment {payment_id} already confirmed")
+            return False
+
+        # Allow processing for 'pending' and 'expired' statuses
+        if current_status not in ['pending', 'expired']:
+            LOG.debug(f"TON payment {payment_id} has status {current_status}, cannot process")
             return False
 
         # CRITICAL FIX: Lock payment row AND user row to prevent concurrent confirmations
@@ -89,9 +99,18 @@ class TonGateway(BasePaymentGateway):
         )
         payment_locked = result.scalar_one_or_none()
 
-        if not payment_locked or payment_locked.status != 'pending':
-            LOG.debug(f"Payment {payment_id} not pending or already confirmed")
+        if not payment_locked:
+            LOG.debug(f"Payment {payment_id} not found during lock")
             return False
+
+        # Allow confirming if status is pending OR expired (but transaction found on blockchain)
+        if payment_locked.status not in ['pending', 'expired']:
+            LOG.debug(f"Payment {payment_id} has status {payment_locked.status}, cannot confirm")
+            return False
+
+        # Log if recovering expired payment
+        if payment_locked.status == 'expired':
+            LOG.warning(f"Recovering expired payment {payment_id} - user paid after local timeout but found on TON blockchain")
 
         # Lock user row for atomic balance update
         result = await self.session.execute(
@@ -131,12 +150,15 @@ class TonGateway(BasePaymentGateway):
 
         # ATOMIC UPDATE: Mark transaction processed, update payment, and credit balance
         from datetime import datetime
+
         old_balance = user.balance
 
         tx.processed_at = datetime.utcnow()
         payment_locked.status = 'confirmed'
         payment_locked.tx_hash = tx.tx_hash
         payment_locked.confirmed_at = datetime.utcnow()
+
+        # Credit payment amount
         user.balance += payment_locked.amount
 
         await self.session.commit()
@@ -145,6 +167,9 @@ class TonGateway(BasePaymentGateway):
                 f"amount={payment_locked.amount}, balance: {old_balance} → {user.balance}, "
                 f"tx_hash={tx.tx_hash}")
 
+        # Check subscription status BEFORE cache invalidation
+        has_active_sub = user.subscription_end and user.subscription_end > datetime.utcnow()
+
         # Invalidate cache (tolerate Redis failures)
         try:
             redis = await self.payment_repo.get_redis()
@@ -152,8 +177,48 @@ class TonGateway(BasePaymentGateway):
         except Exception as e:
             LOG.warning(f"Redis error invalidating cache for user {user.tg_id}: {e}")
 
-        await self.on_payment_confirmed(payment_id, tx.tx_hash)
+        # Send notification to user about successful payment
+        await self.on_payment_confirmed(
+            payment_id=payment_id,
+            tx_hash=tx.tx_hash,
+            tg_id=user.tg_id,
+            total_amount=payment_locked.amount,
+            lang=user.lang,
+            promo_info=None,
+            has_active_subscription=has_active_sub
+        )
         return True
 
-    async def on_payment_confirmed(self, payment_id: int, tx_hash: Optional[str] = None):
+    async def on_payment_confirmed(
+        self,
+        payment_id: int,
+        tx_hash: Optional[str] = None,
+        tg_id: Optional[int] = None,
+        total_amount: Optional[Decimal] = None,
+        lang: str = "ru",
+        promo_info: Optional[dict] = None,
+        has_active_subscription: bool = False
+    ):
+        """
+        Callback when payment is confirmed.
+
+        Sends Telegram notification to user about successful payment.
+        """
         LOG.info(f"TON payment confirmed callback: id={payment_id}, tx={tx_hash}")
+
+        # Send notification if bot is available and we have user info
+        if self.bot and tg_id and total_amount:
+            from app.utils.payment_notifications import send_payment_notification
+
+            try:
+                await send_payment_notification(
+                    bot=self.bot,
+                    tg_id=tg_id,
+                    amount=total_amount,
+                    lang=lang,
+                    has_active_subscription=has_active_subscription,
+                    promo_info=promo_info
+                )
+            except Exception as e:
+                LOG.error(f"Error sending payment notification to {tg_id}: {e}")
+                # Don't fail payment confirmation if notification fails

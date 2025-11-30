@@ -10,7 +10,7 @@ from app.repo.db import get_session
 from app.repo.models import User
 from app.utils.redis import get_redis
 from app.locales.locales import get_translator
-from app.core.keyboards import balance_button_kb
+from app.core.keyboards import balance_button_kb, get_renewal_notification_keyboard
 
 LOG = logging.getLogger(__name__)
 
@@ -39,17 +39,19 @@ class SubscriptionNotificationTask:
         self.task: asyncio.Task = None
         self._running = False
 
-    def _get_random_message(self, lang: str, days: int | str) -> str:
+    def _get_random_message(self, lang: str, days: int | str, user_balance: float = 0) -> str:
         """
-        Get random notification message variant.
+        Get random notification message variant with pricing info.
 
         Args:
             lang: User language ('ru' or 'en')
             days: Days until expiry (3, 1) or 'expired'
+            user_balance: User's current balance for 1-day warning
 
         Returns:
             Random message text
         """
+        from config import PLANS
         t = get_translator(lang)
 
         if days == 3:
@@ -59,11 +61,26 @@ class SubscriptionNotificationTask:
                 t('sub_expiry_3days_3'),
             ]
         elif days == 1:
+            # Add pricing info for last day warning
+            monthly_price = PLANS['sub_1m']['price']
+            needed = max(0, monthly_price - user_balance)
+
             variants = [
                 t('sub_expiry_1day_1'),
                 t('sub_expiry_1day_2'),
                 t('sub_expiry_1day_3'),
             ]
+
+            message = random.choice(variants)
+
+            # Add quick renewal info
+            if needed > 0:
+                message += f"\n\n{t('quick_renewal_info', price=monthly_price, needed=int(needed))}"
+            else:
+                message += f"\n\n{t('quick_renewal_ready', price=monthly_price)}"
+
+            return message
+
         elif days == 'expired':
             variants = [
                 t('sub_expired_1'),
@@ -75,7 +92,7 @@ class SubscriptionNotificationTask:
 
         return random.choice(variants)
 
-    async def _send_notification(self, tg_id: int, lang: str, days: int | str) -> bool:
+    async def _send_notification(self, tg_id: int, lang: str, days: int | str, user_balance: float = 0) -> bool:
         """
         Send subscription expiry notification to user.
 
@@ -83,17 +100,19 @@ class SubscriptionNotificationTask:
             tg_id: Telegram user ID
             lang: User language
             days: Days until expiry (3, 1) or 'expired'
+            user_balance: User's current balance
 
         Returns:
             True if sent successfully, False otherwise
         """
         try:
-            message = self._get_random_message(lang, days)
+            message = self._get_random_message(lang, days, user_balance)
             if not message:
                 return False
 
             t = get_translator(lang)
-            keyboard = balance_button_kb(t)
+            # Use renewal keyboard with both "Renew" and "Balance" buttons
+            keyboard = get_renewal_notification_keyboard(t)
 
             await self.bot.send_message(
                 chat_id=tg_id,
@@ -168,8 +187,8 @@ class SubscriptionNotificationTask:
             LOG.warning(f"Redis error checking notification for {user.tg_id}: {e}")
             return
 
-        # Send notification
-        success = await self._send_notification(user.tg_id, user.lang, days)
+        # Send notification with user balance (for pricing info in 1-day warning)
+        success = await self._send_notification(user.tg_id, user.lang, days, float(user.balance))
 
         # Mark as sent if successful
         if success:

@@ -23,10 +23,10 @@ class PaymentManager:
         self.redis_client = redis_client
         self.payment_repo = PaymentRepository(session, redis_client)
         self.gateways: dict[PaymentMethod, BasePaymentGateway] = {
-            PaymentMethod.TON: TonGateway(session, redis_client),
+            PaymentMethod.TON: TonGateway(session, redis_client, bot=bot),
             PaymentMethod.STARS: TelegramStarsGateway(bot, session, redis_client),
-            PaymentMethod.CRYPTOBOT: CryptoBotGateway(session, redis_client),
-            PaymentMethod.YOOKASSA: YooKassaGateway(session, redis_client),
+            PaymentMethod.CRYPTOBOT: CryptoBotGateway(session, redis_client, bot=bot),
+            PaymentMethod.YOOKASSA: YooKassaGateway(session, redis_client, bot=bot),
         }
         self.user_repo = UserRepository(session, redis_client)
         self.polling_task: Optional[asyncio.Task] = None
@@ -103,10 +103,15 @@ class PaymentManager:
 
     async def confirm_payment(self, payment_id: int, tg_id: int, amount: Decimal, tx_hash: Optional[str] = None):
         try:
+            # Credit payment amount
             await self.user_repo.change_balance(tg_id, amount)
+
             if tx_hash:
                 await self.payment_repo.update_payment_status(payment_id, "confirmed", tx_hash)
+
             LOG.info(f"Payment {payment_id} confirmed: +{amount} for user {tg_id}, tx={tx_hash}")
+
+            return None
         except Exception as e:
             LOG.error(f"Confirm payment error for user {tg_id}: {type(e).__name__}: {e}")
             raise
@@ -137,17 +142,22 @@ class PaymentManager:
                             # Create new session for each check
                             async with get_session() as check_session:
                                 check_redis = await get_redis()
-                                check_gateway = self.gateways[PaymentMethod.CRYPTOBOT].__class__(check_session, check_redis)
+                                check_gateway = self.gateways[PaymentMethod.CRYPTOBOT].__class__(check_session, check_redis, bot=bot)
                                 await check_gateway.check_payment(payment['id'])
 
-                    # Check YooKassa payments
-                    yookassa_pendings = await temp_payment_repo.get_pending_payments(PaymentMethod.YOOKASSA.value)
+                    # Check YooKassa payments (including recently expired ones)
+                    # CRITICAL: Check expired payments too, in case user paid after local timeout
+                    # but before YooKassa timeout (local=10min, YooKassa=60min)
+                    yookassa_pendings = await temp_payment_repo.get_pending_or_recent_expired_payments(
+                        PaymentMethod.YOOKASSA.value,
+                        expired_hours=1
+                    )
                     if yookassa_pendings:
                         for payment in yookassa_pendings:
                             # Create new session for each check
                             async with get_session() as check_session:
                                 check_redis = await get_redis()
-                                check_gateway = self.gateways[PaymentMethod.YOOKASSA].__class__(check_session, check_redis)
+                                check_gateway = self.gateways[PaymentMethod.YOOKASSA].__class__(check_session, check_redis, bot=bot)
                                 await check_gateway.check_payment(payment['id'])
 
                     # If no pending payments, stop polling

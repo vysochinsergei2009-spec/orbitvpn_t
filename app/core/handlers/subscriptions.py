@@ -81,9 +81,17 @@ async def renew_subscription_callback(callback: CallbackQuery, t):
         user_repo, _ = await get_repositories(session)
         balance = await get_user_balance(user_repo, tg_id)
         sub_end = await user_repo.get_subscription_end(tg_id)
-        expire_date = format_expire_date(sub_end)
+        has_active_sub = await user_repo.has_active_subscription(tg_id)
+
+        if sub_end and has_active_sub:
+            # Active subscription - show expiry date
+            expire_date = format_expire_date(sub_end)
+            text = f"{t('current_sub_until', expire_date=expire_date)}\n\n{t('extend_subscription')}\n\n{t('balance')}: {balance:.2f} RUB"
+        else:
+            # Expired or no subscription - show renewal message
+            text = f"{t('extend_subscription')}\n\n{t('balance')}: {balance:.2f} RUB"
 
         await callback.message.edit_text(
-            f"{t('current_sub_until', expire_date=expire_date)}\n\n{t('extend_subscription')}\n\n{t('balance')}: {balance:.2f} RUB",
+            text,
             reply_markup=sub_kb(t, is_extension=True)
         )

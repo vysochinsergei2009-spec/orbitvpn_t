@@ -49,11 +49,16 @@ def main_kb(t: Callable[[str], str], user_id: int | None = None) -> InlineKeyboa
     return _build_keyboard(buttons, adjust=[1, 1, 2])
 
 
-def balance_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
-    return _build_keyboard([
-        {'text': t('add_funds'), 'callback_data': 'add_funds'},
-        {'text': t('back_main'), 'callback_data': 'back_main'},
-    ])
+def balance_kb(t: Callable[[str], str], show_renew: bool = False) -> InlineKeyboardMarkup:
+    """Balance screen keyboard, optionally with renew button for expired subs"""
+    buttons = [{'text': t('add_funds'), 'callback_data': 'add_funds'}]
+
+    if show_renew:
+        buttons.append({'text': t('renew_subscription_btn'), 'callback_data': 'renew_subscription'})
+
+    buttons.append({'text': t('back_main'), 'callback_data': 'back_main'})
+
+    return _build_keyboard(buttons)
 
 
 def balance_button_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
@@ -63,9 +68,18 @@ def balance_button_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
     ])
 
 
+def get_renewal_notification_keyboard(t: Callable[[str], str]) -> InlineKeyboardMarkup:
+    """Keyboard for subscription expiry notifications with renewal action"""
+    return _build_keyboard([
+        {'text': t('renew_now'), 'callback_data': 'renew_subscription'},
+        {'text': t('balance'), 'callback_data': 'balance'},
+    ], adjust=2)
+
+
 def set_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
     return _build_keyboard([
         {'text': t('referral'), 'callback_data': 'referral'},
+        {'text': t('activate_promocode'), 'callback_data': 'activate_promocode'},
         {'text': t('notifications'), 'callback_data': 'notifications_settings'},
         {'text': t('change_language'), 'callback_data': 'change_lang'},
         {'text': t('back_main'), 'callback_data': 'back_main'},
@@ -93,7 +107,8 @@ def myvpn_kb(
             'callback_data': f"cfg_{cfg['id']}"
         })
 
-    if has_active_sub:
+    # Show renew button if: active subscription OR expired subscription (has configs but no active sub)
+    if has_active_sub or configs:
         buttons.append({'text': t('extend'), 'callback_data': 'renew_subscription'})
 
     buttons.append({'text': t('back_main'), 'callback_data': 'back_main'})
@@ -128,18 +143,31 @@ def get_notifications_keyboard(t: Callable[[str], str]) -> InlineKeyboardMarkup:
 
 
 def sub_kb(t: Callable[[str], str], is_extension: bool = False) -> InlineKeyboardMarkup:
-    if is_extension:
-        buttons = [
-            {'text': t(f'extend_by_{key.split("_")[1]}').format(price=plan['price']), 'callback_data': key}
-            for key, plan in PLANS.items()
-            if key.startswith('sub_')
-        ]
-    else:
-        buttons = [
-            {'text': t(key).format(price=plan['price']), 'callback_data': key}
-            for key, plan in PLANS.items()
-            if key.startswith('sub_')
-        ]
+    # Calculate savings for multi-month plans (base: 1-month price)
+    monthly_price = PLANS['sub_1m']['price']
+
+    buttons = []
+    for key, plan in PLANS.items():
+        if not key.startswith('sub_'):
+            continue
+
+        months = plan['days'] // 30
+        regular_cost = monthly_price * months
+        savings = regular_cost - plan['price']
+        savings_percent = int((savings / regular_cost) * 100) if regular_cost > 0 else 0
+
+        if is_extension:
+            base_text = t(f'extend_by_{key.split("_")[1]}').format(price=plan['price'])
+        else:
+            base_text = t(key).format(price=plan['price'])
+
+        # Add savings indicator for 3+ month plans (compact format with percentage)
+        if months >= 3 and savings_percent > 0:
+            text = f"{base_text} 💰(-{savings_percent}%)"
+        else:
+            text = base_text
+
+        buttons.append({'text': text, 'callback_data': key})
 
     buttons.append({'text': t('back_main'), 'callback_data': 'back_main'})
 

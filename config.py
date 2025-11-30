@@ -122,11 +122,11 @@ YOOKASSA_TEST_SECRET_KEY: Final[str] = os.getenv("YOOKASSA_TEST_SECRET_KEY", "")
 YOOKASSA_TESTNET: Final[bool] = os.getenv("YOOKASSA_TESTNET", "false").lower() == "true"
 
 # --- Payment Configuration ---
-PAYMENT_TIMEOUT_MINUTES: Final[int] = 15  # Auto-expire pending payments after 15 minutes
+PAYMENT_TIMEOUT_MINUTES: Final[int] = 60  # Auto-expire pending payments after 60 minutes (1 hour)
 TELEGRAM_STARS_RATE: Final[float] = 1.35  # Stars to RUB conversion
 
 # --- Business Logic Constants ---
-FREE_TRIAL_DAYS: Final[int] = 7
+FREE_TRIAL_DAYS: Final[int] = 3
 REFERRAL_BONUS: Final[float] = 50.0
 MAX_IPS_PER_CONFIG: Final[int] = _get_env_int("MAX_IPS_PER_CONFIG", 2)  # Max concurrent devices per VPN config
 

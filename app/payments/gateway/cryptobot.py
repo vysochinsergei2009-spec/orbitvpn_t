@@ -1,6 +1,7 @@
 import logging
 from decimal import Decimal
 from typing import Optional
+from aiogram import Bot
 from aiocryptopay import AioCryptoPay, Networks
 from app.payments.gateway.base import BasePaymentGateway
 from app.payments.models import PaymentResult, PaymentMethod
@@ -14,10 +15,11 @@ LOG = logging.getLogger(__name__)
 class CryptoBotGateway(BasePaymentGateway):
     requires_polling = True
 
-    def __init__(self, session, redis_client=None):
+    def __init__(self, session, redis_client=None, bot: Optional[Bot] = None):
         self.session = session
         self.payment_repo = PaymentRepository(session, redis_client)
         self._cryptopay: Optional[AioCryptoPay] = None
+        self.bot = bot
 
     async def _get_cryptopay(self) -> AioCryptoPay:
         if self._cryptopay is None:
@@ -112,8 +114,16 @@ class CryptoBotGateway(BasePaymentGateway):
                 LOG.warning(f"Payment {payment_id} not found")
                 return False
 
-            if payment.get('status') != 'pending':
-                LOG.debug(f"CryptoBot payment {payment_id} already {payment.get('status')}")
+            # CRITICAL FIX: Allow confirming expired payments if paid on CryptoBot side
+            # This prevents loss of user funds when payment expires locally but succeeds on gateway
+            current_status = payment.get('status')
+            if current_status == 'confirmed':
+                LOG.debug(f"CryptoBot payment {payment_id} already confirmed")
+                return False
+
+            # Allow processing for 'pending' and 'expired' statuses
+            if current_status not in ['pending', 'expired']:
+                LOG.debug(f"CryptoBot payment {payment_id} has status {current_status}, cannot process")
                 return False
 
             extra_data = payment.get('extra_data', {})
@@ -144,9 +154,18 @@ class CryptoBotGateway(BasePaymentGateway):
                 )
                 payment_locked = result.scalar_one_or_none()
 
-                if not payment_locked or payment_locked.status != 'pending':
-                    LOG.debug(f"Payment {payment_id} not pending or already confirmed")
+                if not payment_locked:
+                    LOG.debug(f"Payment {payment_id} not found during lock")
                     return False
+
+                # Allow confirming if status is pending OR expired (but paid on gateway side)
+                if payment_locked.status not in ['pending', 'expired']:
+                    LOG.debug(f"Payment {payment_id} has status {payment_locked.status}, cannot confirm")
+                    return False
+
+                # Log if recovering expired payment
+                if payment_locked.status == 'expired':
+                    LOG.warning(f"Recovering expired payment {payment_id} - user paid after local timeout but succeeded on CryptoBot")
 
                 # Lock user row for atomic balance update
                 result = await self.session.execute(
@@ -166,12 +185,15 @@ class CryptoBotGateway(BasePaymentGateway):
 
                 # ATOMIC UPDATE: Update payment status and balance
                 from datetime import datetime
+
                 old_balance = user.balance
                 tx_hash = f"cryptobot_{invoice_id}"
 
                 payment_locked.status = 'confirmed'
                 payment_locked.tx_hash = tx_hash
                 payment_locked.confirmed_at = datetime.utcnow()
+
+                # Credit payment amount
                 user.balance += payment_locked.amount
 
                 await self.session.commit()
@@ -180,6 +202,10 @@ class CryptoBotGateway(BasePaymentGateway):
                         f"amount={payment_locked.amount}, balance: {old_balance} → {user.balance}, "
                         f"invoice={invoice_id}")
 
+                # Check subscription status BEFORE cache invalidation
+                from datetime import datetime
+                has_active_sub = user.subscription_end and user.subscription_end > datetime.utcnow()
+
                 # Invalidate cache (tolerate Redis failures)
                 try:
                     redis = await self.payment_repo.get_redis()
@@ -187,7 +213,16 @@ class CryptoBotGateway(BasePaymentGateway):
                 except Exception as e:
                     LOG.warning(f"Redis error invalidating cache for user {user.tg_id}: {e}")
 
-                await self.on_payment_confirmed(payment_id, tx_hash)
+                # Send notification to user about successful payment
+                await self.on_payment_confirmed(
+                    payment_id=payment_id,
+                    tx_hash=tx_hash,
+                    tg_id=user.tg_id,
+                    total_amount=payment_locked.amount,
+                    lang=user.lang,
+                    promo_info=None,
+                    has_active_subscription=has_active_sub
+                )
                 return True
 
             return False
@@ -196,9 +231,39 @@ class CryptoBotGateway(BasePaymentGateway):
             LOG.error(f"Error checking CryptoBot payment {payment_id}: {e}")
             return False
 
-    async def on_payment_confirmed(self, payment_id: int, tx_hash: Optional[str] = None):
-        """Callback when payment is confirmed"""
+    async def on_payment_confirmed(
+        self,
+        payment_id: int,
+        tx_hash: Optional[str] = None,
+        tg_id: Optional[int] = None,
+        total_amount: Optional[Decimal] = None,
+        lang: str = "ru",
+        promo_info: Optional[dict] = None,
+        has_active_subscription: bool = False
+    ):
+        """
+        Callback when payment is confirmed.
+
+        Sends Telegram notification to user about successful payment.
+        """
         LOG.info(f"CryptoBot payment confirmed callback: id={payment_id}, tx={tx_hash}")
+
+        # Send notification if bot is available and we have user info
+        if self.bot and tg_id and total_amount:
+            from app.utils.payment_notifications import send_payment_notification
+
+            try:
+                await send_payment_notification(
+                    bot=self.bot,
+                    tg_id=tg_id,
+                    amount=total_amount,
+                    lang=lang,
+                    has_active_subscription=has_active_subscription,
+                    promo_info=promo_info
+                )
+            except Exception as e:
+                LOG.error(f"Error sending payment notification to {tg_id}: {e}")
+                # Don't fail payment confirmation if notification fails
 
     async def close(self):
         """Close CryptoPay client session"""

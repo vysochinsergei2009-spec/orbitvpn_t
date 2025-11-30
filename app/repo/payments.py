@@ -215,6 +215,50 @@ class PaymentRepository(BaseRepository):
         payments = result.scalars().all()
         return [p.__dict__ for p in payments]
 
+    async def get_pending_or_recent_expired_payments(
+        self,
+        method: Optional[Union[str, PaymentMethod]] = None,
+        expired_hours: int = 1
+    ) -> List[Dict]:
+        """
+        Get pending payments AND recently expired payments (to catch late confirmations).
+
+        This is critical for payment gateways like YooKassa where:
+        - Local timeout is 10 minutes
+        - Gateway timeout is 60 minutes
+        - User might pay after local expiry but before gateway expiry
+
+        Args:
+            method: Payment method to filter by
+            expired_hours: How many hours back to check expired payments
+        """
+        now = datetime.utcnow()
+        expired_threshold = now - timedelta(hours=expired_hours)
+
+        # Get pending payments
+        query_pending = select(PaymentModel).where(PaymentModel.status == 'pending')
+
+        # Get recently expired payments (created within last N hours)
+        query_expired = select(PaymentModel).where(
+            PaymentModel.status == 'expired',
+            PaymentModel.created_at > expired_threshold
+        )
+
+        if method:
+            m = method.value if isinstance(method, PaymentMethod) else method
+            query_pending = query_pending.where(PaymentModel.method == m)
+            query_expired = query_expired.where(PaymentModel.method == m)
+
+        # Execute both queries
+        result_pending = await self.session.execute(query_pending.order_by(PaymentModel.created_at))
+        result_expired = await self.session.execute(query_expired.order_by(PaymentModel.created_at))
+
+        pending_payments = result_pending.scalars().all()
+        expired_payments = result_expired.scalars().all()
+
+        all_payments = list(pending_payments) + list(expired_payments)
+        return [p.__dict__ for p in all_payments]
+
     async def expire_old_payments(self) -> int:
         """Mark expired pending payments as expired"""
         now = datetime.utcnow()

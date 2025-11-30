@@ -37,18 +37,25 @@ async def balance_callback(callback: CallbackQuery, t, state: FSMContext):
         user_repo, _ = await get_repositories(session)
         balance = await get_user_balance(user_repo, tg_id)
         has_active_sub = await user_repo.has_active_subscription(tg_id)
+        sub_end = await user_repo.get_subscription_end(tg_id)
 
         text = t('balance_text', balance=balance)
 
+        # Check if user had subscription before (even if expired)
+        show_renew_button = sub_end is not None and not has_active_sub
+
         if has_active_sub:
-            sub_end = await user_repo.get_subscription_end(tg_id)
             expire_date = format_expire_date(sub_end)
             text += f"\n\n{t('subscription_active_until', expire_date=expire_date)}"
+        elif sub_end is not None:
+            # Had subscription before but expired
+            expire_date = format_expire_date(sub_end)
+            text += f"\n\n{t('subscription_expired_on', expire_date=expire_date)}"
         else:
             cheapest = min(PLANS.values(), key=lambda x: x['price'])
             text += f"\n\n{t('subscription_from', price=cheapest['price'])}"
 
-        await callback.message.edit_text(text, reply_markup=balance_kb(t))
+        await callback.message.edit_text(text, reply_markup=balance_kb(t, show_renew=show_renew_button))
 
 
 @router.callback_query(F.data == 'add_funds')
@@ -366,6 +373,7 @@ async def successful_payment(message: Message, t):
             payment.tx_hash = payment_id
             payment.confirmed_at = datetime.utcnow()
 
+            # Credit payment amount
             user.balance += rub_amount
             new_balance = user.balance
 
@@ -386,8 +394,11 @@ async def successful_payment(message: Message, t):
 
             has_active_sub = await user_repo.has_active_subscription(tg_id)
 
+            # Build success message
+            success_text = t('payment_success', amount=float(rub_amount))
+
             await message.answer(
-                t('payment_success', amount=float(rub_amount)),
+                success_text,
                 reply_markup=payment_success_actions(t, has_active_sub)
             )
 
