@@ -263,7 +263,6 @@ class YooKassaGateway(BasePaymentGateway):
                     tg_id=user.tg_id,
                     total_amount=payment_locked.amount,
                     lang=user.lang,
-                    promo_info=None,
                     has_active_subscription=has_active_sub
                 )
                 return True
@@ -281,7 +280,6 @@ class YooKassaGateway(BasePaymentGateway):
         tg_id: Optional[int] = None,
         total_amount: Optional[Decimal] = None,
         lang: str = "ru",
-        promo_info: Optional[dict] = None,
         has_active_subscription: bool = False
     ):
         """
@@ -301,8 +299,7 @@ class YooKassaGateway(BasePaymentGateway):
                     tg_id=tg_id,
                     amount=total_amount,
                     lang=lang,
-                    has_active_subscription=has_active_subscription,
-                    promo_info=promo_info
+                    has_active_subscription=has_active_subscription
                 )
             except Exception as e:
                 LOG.error(f"Error sending payment notification to {tg_id}: {e}")

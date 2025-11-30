@@ -3,7 +3,6 @@ Payment notification utilities for sending payment confirmation messages to user
 """
 import logging
 from decimal import Decimal
-from typing import Optional
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
@@ -18,8 +17,7 @@ async def send_payment_notification(
     tg_id: int,
     amount: Decimal,
     lang: str = "ru",
-    has_active_subscription: bool = False,
-    promo_info: Optional[dict] = None
+    has_active_subscription: bool = False
 ):
     """
     Send payment confirmation notification to user.
@@ -27,10 +25,9 @@ async def send_payment_notification(
     Args:
         bot: Aiogram Bot instance
         tg_id: User Telegram ID
-        amount: Total amount credited (including bonus)
+        amount: Total amount credited
         lang: User language (ru/en)
         has_active_subscription: Whether user has active subscription
-        promo_info: Optional promo code info dict with keys: code, percent, bonus_amount
 
     Returns:
         True if sent successfully, False otherwise
@@ -38,11 +35,8 @@ async def send_payment_notification(
     try:
         t = get_translator(lang)
 
-        # Build success message with promocode info if applicable
+        # Build success message
         success_text = t('payment_success', amount=float(amount))
-
-        if promo_info:
-            success_text += f"\n\n{t('promocode_bonus_applied', code=promo_info['code'], bonus_amount=promo_info['bonus_amount'], percent=promo_info['percent'])}"
 
         await bot.send_message(
             chat_id=tg_id,

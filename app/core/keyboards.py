@@ -79,7 +79,6 @@ def get_renewal_notification_keyboard(t: Callable[[str], str]) -> InlineKeyboard
 def set_kb(t: Callable[[str], str]) -> InlineKeyboardMarkup:
     return _build_keyboard([
         {'text': t('referral'), 'callback_data': 'referral'},
-        {'text': t('activate_promocode'), 'callback_data': 'activate_promocode'},
         {'text': t('notifications'), 'callback_data': 'notifications_settings'},
         {'text': t('change_language'), 'callback_data': 'change_lang'},
         {'text': t('back_main'), 'callback_data': 'back_main'},

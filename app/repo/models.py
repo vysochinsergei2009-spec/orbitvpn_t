@@ -31,27 +31,6 @@ class Payment(Base):
     expected_crypto_amount = Column(Numeric, nullable=True)
     extra_data = Column(JSON, nullable=True)  # For storing extra data like CryptoBot invoice_id
 
-class PromocodeUsage(Base):
-    __tablename__ = "promocode_usages"
-    id = Column(BigInteger, primary_key=True)
-    promocode_id = Column(BigInteger)
-    tg_id = Column(BigInteger)
-    activated_at = Column(DateTime)
-
-class Promocode(Base):
-    __tablename__ = "promocodes"
-    id = Column(BigInteger, primary_key=True)
-    code = Column(Text)
-    description = Column(Text)
-    created_at = Column(DateTime)
-    expires_at = Column(DateTime)
-    usage_limit = Column(Integer)
-    used_count = Column(Integer)
-    reward_type = Column(Text)
-    reward_value = Column(Numeric)
-    creator_id = Column(BigInteger)
-    active = Column(Boolean)
-
 class Referral(Base):
     __tablename__ = "referrals"
     id = Column(BigInteger, primary_key=True)
