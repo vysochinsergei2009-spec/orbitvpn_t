@@ -4,15 +4,8 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
 from app.admin.keyboards import admin_panel_kb
+from app.core.handlers.utils import safe_answer_callback
 from config import ADMIN_TG_ID
-
-
-async def safe_answer_callback(callback: CallbackQuery):
-    """Safely answer callback query to prevent telegram errors"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
 
 router = Router()
 
@@ -46,103 +39,57 @@ async def admin_stats(callback: CallbackQuery, t):
 
     from datetime import datetime, timedelta
     from decimal import Decimal
-    from sqlalchemy import select, func
+    from sqlalchemy import select, func, case
     from app.repo.db import get_session
     from app.repo.models import User, Payment, Config
 
     async with get_session() as session:
         now = datetime.utcnow()
-
-        # User statistics
-        result = await session.execute(select(func.count(User.tg_id)))
-        total_users = result.scalar() or 0
-
-        # New users by time periods
         day_ago = now - timedelta(days=1)
         week_ago = now - timedelta(days=7)
         month_ago = now - timedelta(days=30)
 
-        result = await session.execute(
-            select(func.count(User.tg_id)).where(User.created_at >= day_ago)
+        user_stats = select(
+            func.count(User.tg_id).label('total_users'),
+            func.count(case((User.created_at >= day_ago, 1))).label('new_users_24h'),
+            func.count(case((User.created_at >= week_ago, 1))).label('new_users_7d'),
+            func.count(case((User.created_at >= month_ago, 1))).label('new_users_30d'),
+            func.count(case((User.subscription_end > now, 1))).label('active_subs'),
+            func.count(case((User.subscription_end.isnot(None) & (User.subscription_end <= now), 1))).label('expired_subs'),
+            func.count(case((User.subscription_end.is_(None), 1))).label('no_subs')
         )
-        new_users_24h = result.scalar() or 0
 
-        result = await session.execute(
-            select(func.count(User.tg_id)).where(User.created_at >= week_ago)
+        payment_stats = select(
+            func.coalesce(func.sum(case((Payment.status == 'confirmed', Payment.amount))), 0).label('total_revenue'),
+            func.coalesce(func.sum(case(((Payment.status == 'confirmed') & (Payment.confirmed_at >= day_ago), Payment.amount))), 0).label('today_revenue'),
+            func.coalesce(func.sum(case(((Payment.status == 'confirmed') & (Payment.confirmed_at >= week_ago), Payment.amount))), 0).label('week_revenue'),
+            func.coalesce(func.sum(case(((Payment.status == 'confirmed') & (Payment.confirmed_at >= month_ago), Payment.amount))), 0).label('month_revenue')
         )
-        new_users_7d = result.scalar() or 0
 
-        result = await session.execute(
-            select(func.count(User.tg_id)).where(User.created_at >= month_ago)
+        config_stats = select(
+            func.count(Config.id).label('total_configs'),
+            func.count(case((Config.deleted == False, 1))).label('active_configs')
         )
-        new_users_30d = result.scalar() or 0
 
-        # Subscription statistics
-        result = await session.execute(
-            select(func.count(User.tg_id)).where(User.subscription_end > now)
-        )
-        active_subs = result.scalar() or 0
+        user_result = (await session.execute(user_stats)).first()
+        payment_result = (await session.execute(payment_stats)).first()
+        config_result = (await session.execute(config_stats)).first()
 
-        result = await session.execute(
-            select(func.count(User.tg_id)).where(
-                User.subscription_end.isnot(None),
-                User.subscription_end <= now
-            )
-        )
-        expired_subs = result.scalar() or 0
+        total_users = user_result.total_users or 0
+        new_users_24h = user_result.new_users_24h or 0
+        new_users_7d = user_result.new_users_7d or 0
+        new_users_30d = user_result.new_users_30d or 0
+        active_subs = user_result.active_subs or 0
+        expired_subs = user_result.expired_subs or 0
+        no_subs = user_result.no_subs or 0
 
-        result = await session.execute(
-            select(func.count(User.tg_id)).where(User.subscription_end.is_(None))
-        )
-        no_subs = result.scalar() or 0
+        total_revenue = float(payment_result.total_revenue or 0)
+        today_revenue = float(payment_result.today_revenue or 0)
+        week_revenue = float(payment_result.week_revenue or 0)
+        month_revenue = float(payment_result.month_revenue or 0)
 
-        # Revenue statistics
-        result = await session.execute(
-            select(func.sum(Payment.amount)).where(Payment.status == 'confirmed')
-        )
-        total_revenue = result.scalar() or Decimal(0)
-        if isinstance(total_revenue, Decimal):
-            total_revenue = float(total_revenue)
-
-        result = await session.execute(
-            select(func.sum(Payment.amount)).where(
-                Payment.status == 'confirmed',
-                Payment.confirmed_at >= day_ago
-            )
-        )
-        today_revenue = result.scalar() or Decimal(0)
-        if isinstance(today_revenue, Decimal):
-            today_revenue = float(today_revenue)
-
-        result = await session.execute(
-            select(func.sum(Payment.amount)).where(
-                Payment.status == 'confirmed',
-                Payment.confirmed_at >= week_ago
-            )
-        )
-        week_revenue = result.scalar() or Decimal(0)
-        if isinstance(week_revenue, Decimal):
-            week_revenue = float(week_revenue)
-
-        result = await session.execute(
-            select(func.sum(Payment.amount)).where(
-                Payment.status == 'confirmed',
-                Payment.confirmed_at >= month_ago
-            )
-        )
-        month_revenue = result.scalar() or Decimal(0)
-        if isinstance(month_revenue, Decimal):
-            month_revenue = float(month_revenue)
-
-        # Config statistics
-        result = await session.execute(select(func.count(Config.id)))
-        total_configs = result.scalar() or 0
-
-        result = await session.execute(
-            select(func.count(Config.id)).where(Config.deleted == False)
-        )
-        active_configs = result.scalar() or 0
-
+        total_configs = config_result.total_configs or 0
+        active_configs = config_result.active_configs or 0
         deleted_configs = total_configs - active_configs
 
     stats_text = t('admin_bot_stats',

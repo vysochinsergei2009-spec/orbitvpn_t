@@ -128,7 +128,10 @@ TELEGRAM_STARS_RATE: Final[float] = 1.35  # Stars to RUB conversion
 # --- Business Logic Constants ---
 FREE_TRIAL_DAYS: Final[int] = 3
 REFERRAL_BONUS: Final[float] = 50.0
-MAX_IPS_PER_CONFIG: Final[int] = _get_env_int("MAX_IPS_PER_CONFIG", 2)  # Max concurrent devices per VPN config
+MAX_IPS_PER_CONFIG: Final[int] = _get_env_int("MAX_IPS_PER_CONFIG", 2)
+
+MIN_PAYMENT_AMOUNT: Final[int] = 200
+MAX_PAYMENT_AMOUNT: Final[int] = 100000
 
 # --- Subscription Plans ---
 PLANS: Final[dict[str, Any]] = _load_plans()

@@ -16,7 +16,7 @@ from app.payments.manager import PaymentManager
 from app.payments.models import PaymentMethod
 from app.utils.logging import get_logger
 from app.utils.redis import get_redis
-from config import TELEGRAM_STARS_RATE, PLANS, bot
+from config import TELEGRAM_STARS_RATE, PLANS, bot, MIN_PAYMENT_AMOUNT, MAX_PAYMENT_AMOUNT
 from .utils import safe_answer_callback, get_repositories, get_user_balance, format_expire_date
 
 router = Router()
@@ -93,9 +93,7 @@ async def process_amount_selection(callback: CallbackQuery, t, state: FSMContext
     # Validate preset amount
     try:
         amount = Decimal(amount_str)
-        # Minimum amount is 200 RUB
-        min_amount = 200
-        if amount <= 0 or amount < min_amount or amount > 100000:
+        if amount <= 0 or amount < MIN_PAYMENT_AMOUNT or amount > MAX_PAYMENT_AMOUNT:
             raise ValueError("Invalid preset amount")
     except (ValueError, TypeError) as e:
         LOG.error(f"Invalid preset amount: {amount_str} - {e}")
@@ -113,7 +111,7 @@ async def process_custom_amount(message: Message, state: FSMContext, t):
         amount = Decimal(message.text)
         if amount <= 0:
             raise ValueError("Amount must be positive")
-        if amount < 200 or amount > 100000:
+        if amount < MIN_PAYMENT_AMOUNT or amount > MAX_PAYMENT_AMOUNT:
             raise ValueError("Amount out of range")
         if amount.as_tuple().exponent < -2:
             raise ValueError("Too many decimal places")
@@ -129,6 +127,65 @@ async def process_custom_amount(message: Message, state: FSMContext, t):
     await process_payment(message, t, method_str, amount)
 
 
+def _build_payment_keyboard(t, method: PaymentMethod, result):
+    """Build inline keyboard for payment based on method type"""
+    if method == PaymentMethod.TON:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')]
+        ])
+    elif method == PaymentMethod.STARS and result.url:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t('pay_button'), url=result.url)]
+        ])
+    elif method == PaymentMethod.CRYPTOBOT and result.pay_url:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t('pay_button'), url=result.pay_url)]
+        ])
+    elif method == PaymentMethod.YOOKASSA and result.pay_url:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t('pay_button'), url=result.pay_url)],
+            [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')]
+        ])
+    return None
+
+
+def _build_payment_text(t, method: PaymentMethod, result):
+    """Build payment instruction text based on method type"""
+    if method == PaymentMethod.TON:
+        return t(
+            'ton_payment_instruction',
+            ton_amount=f'<b>{result.expected_crypto_amount} TON</b>',
+            wallet=f"<pre><code>{result.wallet}</code></pre>",
+            comment=f'<pre>{result.comment}</pre>'
+        )
+    return result.text
+
+
+async def _send_message(msg_or_callback, text, keyboard=None, parse_mode=None):
+    """Send message handling both callbacks and regular messages"""
+    is_callback = isinstance(msg_or_callback, CallbackQuery)
+    if is_callback:
+        await msg_or_callback.message.edit_text(text, reply_markup=keyboard, parse_mode=parse_mode)
+    else:
+        await msg_or_callback.answer(text, reply_markup=keyboard, parse_mode=parse_mode)
+
+
+async def _handle_active_payment_error(msg_or_callback, t, error_msg, method_str, amount):
+    """Handle error when user has active pending payment"""
+    parts = error_msg.split(":")
+    active_payment_id = int(parts[1])
+    active_amount = parts[2]
+    active_method = parts[3]
+
+    text = t('active_payment_exists', amount=active_amount, method=active_method.upper())
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t('continue_payment'), callback_data=f'continue_payment_{active_payment_id}')],
+        [InlineKeyboardButton(text=t('create_new_payment'), callback_data=f'force_payment_{method_str}_{amount}')],
+        [InlineKeyboardButton(text=t('back'), callback_data='balance')]
+    ])
+    await _send_message(msg_or_callback, text, kb)
+
+
 async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
     tg_id = msg_or_callback.from_user.id
     is_callback = isinstance(msg_or_callback, CallbackQuery)
@@ -137,11 +194,7 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
         method = PaymentMethod(method_str)
     except ValueError:
         LOG.error(f"Invalid method for user {tg_id}: {method_str}")
-        text = t('error_creating_payment')
-        if is_callback:
-            await msg_or_callback.message.edit_text(text, reply_markup=balance_kb(t))
-        else:
-            await msg_or_callback.answer(text)
+        await _send_message(msg_or_callback, t('error_creating_payment'), balance_kb(t))
         return
 
     async with get_session() as session:
@@ -151,91 +204,27 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
             chat_id = msg_or_callback.message.chat.id if is_callback else msg_or_callback.chat.id
             result = await manager.create_payment(t, tg_id=tg_id, method=method, amount=amount, chat_id=chat_id)
 
-            if method == PaymentMethod.TON:
-                text = t(
-                    'ton_payment_instruction',
-                    ton_amount=f'<b>{result.expected_crypto_amount} TON</b>',
-                    wallet=f"<pre><code>{result.wallet}</code></pre>",
-                    comment=f'<pre>{result.comment}</pre>'
-                )
-                # Add "Payment Sent" button for TON payments
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')]
-                ])
-                if is_callback:
-                    await msg_or_callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-                else:
-                    await msg_or_callback.answer(text, parse_mode="HTML", reply_markup=kb)
+            text = _build_payment_text(t, method, result)
+            kb = _build_payment_keyboard(t, method, result)
+            parse_mode = "HTML" if method == PaymentMethod.TON else None
 
-            elif method == PaymentMethod.STARS and result.url:
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('pay_button'), url=result.url)]
-                ])
-                if is_callback:
-                    await msg_or_callback.message.edit_text(result.text, reply_markup=kb)
-                else:
-                    await msg_or_callback.answer(result.text, reply_markup=kb)
-
-            elif method == PaymentMethod.CRYPTOBOT and result.pay_url:
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('pay_button'), url=result.pay_url)]
-                ])
-                if is_callback:
-                    await msg_or_callback.message.edit_text(result.text, reply_markup=kb)
-                else:
-                    await msg_or_callback.answer(result.text, reply_markup=kb)
-
-            elif method == PaymentMethod.YOOKASSA and result.pay_url:
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('pay_button'), url=result.pay_url)],
-                    [InlineKeyboardButton(text=t('payment_sent'), callback_data=f'payment_sent_{result.payment_id}')]
-                ])
-                if is_callback:
-                    await msg_or_callback.message.edit_text(result.text, reply_markup=kb)
-                else:
-                    await msg_or_callback.answer(result.text, reply_markup=kb)
+            await _send_message(msg_or_callback, text, kb, parse_mode)
 
         except ValueError as e:
             error_msg = str(e)
-            # Check if it's an active payment error
             if error_msg.startswith("active_payment:"):
-                parts = error_msg.split(":")
-                active_payment_id = int(parts[1])
-                active_amount = parts[2]
-                active_method = parts[3]
-
-                # Show choice to user: continue with existing or create new
-                text = t('active_payment_exists', amount=active_amount, method=active_method.upper())
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=t('continue_payment'), callback_data=f'continue_payment_{active_payment_id}')],
-                    [InlineKeyboardButton(text=t('create_new_payment'), callback_data=f'force_payment_{method_str}_{amount}')],
-                    [InlineKeyboardButton(text=t('back'), callback_data='balance')]
-                ])
-                if is_callback:
-                    await msg_or_callback.message.edit_text(text, reply_markup=kb)
-                else:
-                    await msg_or_callback.answer(text, reply_markup=kb)
+                await _handle_active_payment_error(msg_or_callback, t, error_msg, method_str, amount)
             else:
                 LOG.error(f"Payment error for user {tg_id}: ValueError: {e}")
-                text = t('error_creating_payment')
-                if is_callback:
-                    await msg_or_callback.message.edit_text(text, reply_markup=balance_kb(t))
-                else:
-                    await msg_or_callback.answer(text)
+                await _send_message(msg_or_callback, t('error_creating_payment'), balance_kb(t))
+
         except (OperationalError, SQLTimeoutError) as e:
             LOG.error(f"Database error for user {tg_id}: {type(e).__name__}: {e}")
-            text = t('service_temporarily_unavailable')
-            if is_callback:
-                await msg_or_callback.message.edit_text(text, reply_markup=balance_kb(t))
-            else:
-                await msg_or_callback.answer(text)
+            await _send_message(msg_or_callback, t('service_temporarily_unavailable'), balance_kb(t))
+
         except Exception as e:
             LOG.error(f"Payment error for user {tg_id}: {type(e).__name__}: {e}")
-            text = t('error_creating_payment')
-            if is_callback:
-                await msg_or_callback.message.edit_text(text, reply_markup=balance_kb(t))
-            else:
-                await msg_or_callback.answer(text)
+            await _send_message(msg_or_callback, t('error_creating_payment'), balance_kb(t))
 
 
 @router.pre_checkout_query()
@@ -266,7 +255,7 @@ async def pre_checkout(pre_checkout_query: PreCheckoutQuery):
             )
             return
 
-        if amount < 200 or amount > 100000:
+        if amount < MIN_PAYMENT_AMOUNT or amount > MAX_PAYMENT_AMOUNT:
             await bot.answer_pre_checkout_query(
                 pre_checkout_query.id,
                 ok=False,

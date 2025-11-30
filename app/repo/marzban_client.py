@@ -1,11 +1,3 @@
-"""
-Marzban Client Manager for multi-instance and node management.
-
-This module provides a centralized way to interact with multiple Marzban instances,
-each of which can manage multiple nodes. It implements load balancing logic to
-distribute users across instances and nodes efficiently.
-"""
-
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass
 from aiomarzban import MarzbanAPI, UserDataLimitResetStrategy
@@ -21,7 +13,6 @@ LOG = get_logger(__name__)
 
 @dataclass
 class NodeLoadMetrics:
-    """Metrics for calculating node load."""
     node_id: int
     node_name: str
     active_users: int
@@ -32,20 +23,8 @@ class NodeLoadMetrics:
 
     @property
     def load_score(self) -> float:
-        """
-        Calculate load score for this node.
-        Lower score = less loaded = better choice.
-
-        Formula combines:
-        - Active users count (primary factor)
-        - Usage coefficient (configured node weight)
-        - Traffic volume (secondary factor)
-        """
-        # Normalize traffic to GB
         total_traffic_gb = (self.uplink + self.downlink) / (1024 ** 3)
 
-        # Calculate weighted score
-        # Users have highest weight, traffic is normalized to 0-100 range
         user_weight = 100.0
         traffic_weight = 1.0
 
@@ -58,21 +37,10 @@ class NodeLoadMetrics:
 
 
 class MarzbanClient:
-    """
-    Manages multiple Marzban instances and provides load-balanced user creation.
-
-    Each Marzban instance can have multiple nodes. This client:
-    1. Fetches all active Marzban instances from database
-    2. Queries each instance for its nodes and their usage
-    3. Selects the least loaded node across all instances
-    4. Creates users on the selected instance
-    """
-
     def __init__(self):
         self._instances_cache: Dict[str, MarzbanAPI] = {}
 
     async def _get_active_instances(self) -> List[MarzbanInstance]:
-        """Fetch all active Marzban instances from database, ordered by priority."""
         async with get_session() as session:
             result = await session.execute(
                 select(MarzbanInstance)
@@ -82,7 +50,6 @@ class MarzbanClient:
             return list(result.scalars().all())
 
     def _get_or_create_api(self, instance: MarzbanInstance) -> MarzbanAPI:
-        """Get cached MarzbanAPI instance or create new one."""
         if instance.id not in self._instances_cache:
             self._instances_cache[instance.id] = MarzbanAPI(
                 address=instance.base_url,
@@ -97,22 +64,38 @@ class MarzbanClient:
         instance: MarzbanInstance,
         api: MarzbanAPI
     ) -> List[NodeLoadMetrics]:
-        """
-        Fetch node metrics for a given Marzban instance.
+        from app.utils.redis import get_redis
+        import json
 
-        Returns metrics including active users count and traffic data.
-        Excludes nodes listed in instance.excluded_node_names.
-        """
+        redis_key = f"marzban:{instance.id}:node_metrics"
+
         try:
-            # Fetch all nodes
+            redis = await get_redis()
+            cached = await redis.get(redis_key)
+            if cached:
+                cached_data = json.loads(cached)
+                return [
+                    NodeLoadMetrics(
+                        node_id=m['node_id'],
+                        node_name=m['node_name'],
+                        active_users=m['active_users'],
+                        usage_coefficient=m['usage_coefficient'],
+                        uplink=m['uplink'],
+                        downlink=m['downlink'],
+                        instance_id=m['instance_id']
+                    )
+                    for m in cached_data
+                ]
+        except Exception as e:
+            LOG.warning(f"Redis error reading node metrics for {instance.id}: {e}")
+
+        try:
             try:
                 nodes = await api.get_nodes()
             except Exception as e:
-                # Nodes API not available in this Marzban version
                 LOG.debug(f"Nodes API not available for instance {instance.id}: {e}")
                 return []
 
-            # Filter out excluded nodes
             excluded_names = instance.excluded_node_names or []
             if excluded_names:
                 original_count = len(nodes)
@@ -120,12 +103,10 @@ class MarzbanClient:
                 if len(nodes) < original_count:
                     LOG.info(f"Excluded {original_count - len(nodes)} node(s) from instance {instance.id}: {excluded_names}")
 
-            # If all nodes are excluded, return empty
             if not nodes:
                 LOG.warning(f"All nodes excluded for instance {instance.id}")
                 return []
 
-            # Fetch node usage stats (optional, may not exist in older Marzban)
             usage_map = {}
             try:
                 usage_response = await api.get_nodes_usage()
@@ -136,20 +117,13 @@ class MarzbanClient:
             except Exception as e:
                 LOG.debug(f"Node usage API not available for instance {instance.id}: {e}")
 
-            # Get active users per node
-            # Note: We need to count users per node by fetching all users
-            # This is expensive but necessary for accurate load balancing
-            # TODO: Consider caching this data with TTL
             try:
-                users = await api.get_users(limit=10000)  # Adjust limit as needed
+                users = await api.get_users(limit=10000)
                 total_active_users = sum(1 for u in users.users if u.status == 'active')
             except Exception as e:
                 LOG.debug(f"Failed to get users for instance {instance.id}: {e}")
                 total_active_users = 0
 
-            users_per_node: Dict[int, int] = {}
-            # For now, estimate users per node as total / node count
-            # This is a simplification - ideally Marzban API would provide this
             node_count = len(nodes)
             avg_users_per_node = total_active_users / node_count if node_count > 0 else 0
 
@@ -162,12 +136,30 @@ class MarzbanClient:
                 metrics.append(NodeLoadMetrics(
                     node_id=node.id,
                     node_name=node.name,
-                    active_users=int(avg_users_per_node),  # Approximation
+                    active_users=int(avg_users_per_node),
                     usage_coefficient=node.usage_coefficient or 1.0,
                     uplink=uplink,
                     downlink=downlink,
                     instance_id=instance.id
                 ))
+
+            try:
+                redis = await get_redis()
+                cache_data = [
+                    {
+                        'node_id': m.node_id,
+                        'node_name': m.node_name,
+                        'active_users': m.active_users,
+                        'usage_coefficient': m.usage_coefficient,
+                        'uplink': m.uplink,
+                        'downlink': m.downlink,
+                        'instance_id': m.instance_id
+                    }
+                    for m in metrics
+                ]
+                await redis.setex(redis_key, 120, json.dumps(cache_data))
+            except Exception as e:
+                LOG.warning(f"Redis error caching node metrics for {instance.id}: {e}")
 
             return metrics
 
@@ -179,19 +171,6 @@ class MarzbanClient:
         self,
         manual_instance_id: Optional[str] = None
     ) -> Tuple[MarzbanInstance, MarzbanAPI, Optional[int]]:
-        """
-        Select the best Marzban instance and node based on load.
-
-        Args:
-            manual_instance_id: If provided, use this specific instance instead of auto-selection
-
-        Returns:
-            Tuple of (MarzbanInstance, MarzbanAPI, node_id or None)
-            node_id is None if automatic node selection should be used
-
-        Raises:
-            ValueError: If no active instances available or manual instance not found
-        """
         instances = await self._get_active_instances()
 
         if not instances:
@@ -246,7 +225,7 @@ class MarzbanClient:
         self,
         username: str,
         days: int,
-        data_limit: int = 50,
+        data_limit: int = 300,
         max_ips: Optional[int] = None,
         manual_instance_id: Optional[str] = None
     ):

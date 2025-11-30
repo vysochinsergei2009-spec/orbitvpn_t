@@ -5,6 +5,7 @@ from aiogram.types import CallbackQuery
 from sqlalchemy import select, func
 
 from app.admin.keyboards import admin_servers_kb, admin_clear_configs_confirm_kb, admin_instance_detail_kb
+from app.core.handlers.utils import safe_answer_callback
 from app.utils.config_cleanup import cleanup_expired_configs
 from app.repo.db import get_session
 from app.repo.models import MarzbanInstance
@@ -12,16 +13,7 @@ from app.repo.marzban_client import MarzbanClient
 from app.utils.logging import get_logger
 from config import ADMIN_TG_ID
 
-
 LOG = get_logger(__name__)
-
-
-async def safe_answer_callback(callback: CallbackQuery):
-    """Safely answer callback query to prevent telegram errors"""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
 
 router = Router()
 
