@@ -185,12 +185,14 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
         return
 
     async with get_session() as session:
+        payment_id = None
         try:
             redis_client = await get_redis()
             manager = PaymentManager(session, redis_client)
             chat_id = msg_or_callback.message.chat.id if is_callback else msg_or_callback.chat.id
             
             result = await manager.create_payment(t, tg_id=tg_id, method=method, amount=amount, chat_id=chat_id)
+            payment_id = result.payment_id
 
             text = _build_payment_text(t, method, result)
             kb = _build_payment_keyboard(t, method, result)
@@ -204,6 +206,17 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
 
         except (ValueError, OperationalError, SQLTimeoutError) as e:
             LOG.error(f"Payment error for user {tg_id}: {type(e).__name__}: {e}", exc_info=True)
+            
+            # CRITICAL FIX: Cancel payment if it was created but gateway failed
+            if payment_id:
+                try:
+                    redis_client = await get_redis()
+                    manager = PaymentManager(session, redis_client)
+                    await manager.cancel_payment(payment_id)
+                    LOG.info(f"Cancelled payment {payment_id} for user {tg_id} due to gateway error")
+                except Exception as cancel_err:
+                    LOG.error(f"Failed to cancel payment {payment_id}: {cancel_err}", exc_info=True)
+            
             error_text = t('error_creating_payment')
             if is_callback:
                 await msg_or_callback.message.answer(error_text, reply_markup=balance_kb(t))
@@ -212,6 +225,17 @@ async def process_payment(msg_or_callback, t, method_str: str, amount: Decimal):
 
         except Exception as e:
             LOG.error(f"Unexpected payment error for user {tg_id}: {type(e).__name__}: {e}", exc_info=True)
+            
+            # CRITICAL FIX: Cancel payment if it was created but gateway failed
+            if payment_id:
+                try:
+                    redis_client = await get_redis()
+                    manager = PaymentManager(session, redis_client)
+                    await manager.cancel_payment(payment_id)
+                    LOG.info(f"Cancelled payment {payment_id} for user {tg_id} due to unexpected error")
+                except Exception as cancel_err:
+                    LOG.error(f"Failed to cancel payment {payment_id}: {cancel_err}", exc_info=True)
+            
             error_text = t('error_creating_payment')
             if is_callback:
                 await msg_or_callback.message.answer(error_text, reply_markup=balance_kb(t))

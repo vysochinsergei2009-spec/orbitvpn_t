@@ -82,20 +82,30 @@ class PaymentManager:
                 expected_crypto_amount=expected_crypto_amount
             )
 
-            gateway = self.gateways[method]
-            result = await gateway.create_payment(
-                t,
-                tg_id=tg_id,
-                amount=amount,
-                chat_id=chat_id,
-                payment_id=payment_id,
-                comment=comment
-            )
+            try:
+                gateway = self.gateways[method]
+                result = await gateway.create_payment(
+                    t,
+                    tg_id=tg_id,
+                    amount=amount,
+                    chat_id=chat_id,
+                    payment_id=payment_id,
+                    comment=comment
+                )
 
-            LOG.info(f"Payment created: {method} for user {tg_id}, amount {amount}, id={payment_id}")
-            if method in [PaymentMethod.TON, PaymentMethod.CRYPTOBOT, PaymentMethod.YOOKASSA]:
-                await self.start_polling_if_needed()
-            return result
+                LOG.info(f"Payment created: {method} for user {tg_id}, amount {amount}, id={payment_id}")
+                if method in [PaymentMethod.TON, PaymentMethod.CRYPTOBOT, PaymentMethod.YOOKASSA]:
+                    await self.start_polling_if_needed()
+                return result
+            except Exception as gateway_error:
+                # CRITICAL FIX: If gateway fails, cancel the payment in DB
+                LOG.error(f"Gateway error for payment {payment_id}: {type(gateway_error).__name__}: {gateway_error}")
+                try:
+                    await self.cancel_payment(payment_id)
+                    LOG.info(f"Cancelled payment {payment_id} due to gateway error")
+                except Exception as cancel_err:
+                    LOG.error(f"Failed to cancel payment {payment_id}: {cancel_err}", exc_info=True)
+                raise
         except Exception as e:
             LOG.error(f"Create payment error for user {tg_id}: {type(e).__name__}: {e}")
             raise

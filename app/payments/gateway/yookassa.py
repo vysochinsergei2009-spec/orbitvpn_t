@@ -5,6 +5,8 @@ from decimal import Decimal
 from typing import Optional
 from aiogram import Bot
 from yookassa import Configuration, Payment as YooKassaPayment
+from urllib3.exceptions import ConnectTimeoutError, ReadTimeoutError, TimeoutError as Urllib3TimeoutError
+from requests.exceptions import ConnectTimeout, ReadTimeout, Timeout as RequestsTimeout
 from app.payments.gateway.base import BasePaymentGateway
 from app.payments.models import PaymentResult, PaymentMethod
 from app.repo.payments import PaymentRepository
@@ -52,9 +54,10 @@ class YooKassaGateway(BasePaymentGateway):
                     )
 
             await asyncio.to_thread(Configuration.configure, shop_id, secret_key)
-            Configuration.timeout = 15
+            # Set timeout: 10s connect, 20s read (total 30s max)
+            Configuration.timeout = 30
             self._configured = True
-            LOG.info(f"YooKassa configured successfully in {mode} mode (shop_id: {shop_id})")
+            LOG.info(f"YooKassa configured successfully in {mode} mode (shop_id: {shop_id}, timeout=30s)")
 
     async def create_payment(
         self,
@@ -114,8 +117,49 @@ class YooKassaGateway(BasePaymentGateway):
                 }
             }
 
-            LOG.info(f"Creating YooKassa payment for user {tg_id}, amount={amount}")
-            yookassa_payment = await asyncio.to_thread(YooKassaPayment.create, payment_data)
+            LOG.info(f"Creating YooKassa payment for user {tg_id}, amount={amount}, payment_id={payment_id}")
+            
+            # Retry logic with exponential backoff
+            max_retries = 3
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    if attempt > 0:
+                        wait_time = 2 ** attempt  # Exponential backoff: 2s, 4s
+                        LOG.warning(f"YooKassa API retry attempt {attempt + 1}/{max_retries} for payment {payment_id}, "
+                                  f"waiting {wait_time}s before retry...")
+                        await asyncio.sleep(wait_time)
+                    
+                    yookassa_payment = await asyncio.to_thread(YooKassaPayment.create, payment_data)
+                    break  # Success, exit retry loop
+                    
+                except (ConnectTimeoutError, ReadTimeoutError, Urllib3TimeoutError,
+                        ConnectTimeout, ReadTimeout, RequestsTimeout,
+                        TimeoutError, asyncio.TimeoutError) as timeout_err:
+                    last_error = timeout_err
+                    error_type = type(timeout_err).__name__
+                    LOG.warning(f"YooKassa API timeout (attempt {attempt + 1}/{max_retries}) for payment {payment_id}: "
+                              f"{error_type}: {timeout_err}")
+                    
+                    if attempt == max_retries - 1:
+                        # Last attempt failed
+                        LOG.error(f"YooKassa API timeout after {max_retries} attempts for payment {payment_id}")
+                        raise ValueError(f"YooKassa API timeout after {max_retries} attempts: {timeout_err}")
+                    # Continue to next retry
+                    
+                except Exception as api_err:
+                    # Non-timeout errors: don't retry, fail immediately
+                    error_type = type(api_err).__name__
+                    LOG.error(f"YooKassa API error (non-retryable) for payment {payment_id}: "
+                            f"{error_type}: {api_err}")
+                    raise ValueError(f"YooKassa API error: {api_err}")
+            else:
+                # All retries exhausted
+                if last_error:
+                    raise ValueError(f"YooKassa API failed after {max_retries} attempts: {last_error}")
+                else:
+                    raise ValueError("YooKassa API failed: unknown error")
 
             # Validate response
             if not yookassa_payment or not yookassa_payment.id:
@@ -153,9 +197,15 @@ class YooKassaGateway(BasePaymentGateway):
                 pay_url=confirmation_url
             )
 
+        except ValueError as ve:
+            # Re-raise ValueError as-is (already formatted)
+            raise
         except Exception as e:
-            LOG.error(f"Error creating YooKassa payment: {type(e).__name__}: {e}", exc_info=True)
-            raise ValueError(f"Failed to create YooKassa payment: {e}")
+            error_type = type(e).__name__
+            error_msg = str(e)
+            LOG.error(f"Error creating YooKassa payment for user {tg_id}, payment_id={payment_id}, "
+                     f"amount={amount}: {error_type}: {error_msg}", exc_info=True)
+            raise ValueError(f"Failed to create YooKassa payment: {error_type}: {error_msg}")
 
     async def check_payment(self, payment_id: int) -> bool:
         """Check if YooKassa payment has been paid"""
