@@ -1,22 +1,25 @@
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
+from aiogram.fsm.context import FSMContext # Added
 
 from app.core.keyboards import set_kb, get_language_keyboard, get_notifications_keyboard
 from app.db.db import get_session
-from .utils import safe_answer_callback, get_repositories
+from ..utils import safe_answer_callback, get_repositories
 
 router = Router()
 
 
 @router.callback_query(F.data == 'settings')
-async def settings_callback(callback: CallbackQuery, t):
+async def settings_callback(callback: CallbackQuery, t, state: FSMContext): # Added state
     await safe_answer_callback(callback)
+    await state.clear() # Added clear state
     await callback.message.edit_text(t("settings_text"), reply_markup=set_kb(t))
 
 
 @router.callback_query(F.data == 'change_lang')
-async def change_lang_callback(callback: CallbackQuery, t):
+async def change_lang_callback(callback: CallbackQuery, t, state: FSMContext): # Added state
     await safe_answer_callback(callback)
+    await state.clear() # Added clear state
     await callback.message.edit_text(
         t("choose_language"),
         reply_markup=get_language_keyboard(t)
@@ -24,7 +27,8 @@ async def change_lang_callback(callback: CallbackQuery, t):
 
 
 @router.callback_query(F.data.startswith("set_lang:"))
-async def set_lang_callback(callback: CallbackQuery, t):
+async def set_lang_callback(callback: CallbackQuery, t, state: FSMContext): # Added state
+    await state.clear() # Added clear state
     lang = callback.data.split(":")[1]
     tg_id = callback.from_user.id
 
@@ -43,7 +47,9 @@ async def set_lang_callback(callback: CallbackQuery, t):
 
 
 @router.callback_query(F.data == 'notifications_settings')
-async def notifications_settings_callback(callback: CallbackQuery, t):
+async def notifications_settings_callback(callback: CallbackQuery, t, state: FSMContext): # Added state
+    await safe_answer_callback(callback)
+    await state.clear() # Added clear state
     tg_id = callback.from_user.id
 
     async with get_session() as session:
@@ -52,7 +58,6 @@ async def notifications_settings_callback(callback: CallbackQuery, t):
 
     status = t('notifications_enabled') if notifications_enabled else t('notifications_disabled')
 
-    await safe_answer_callback(callback)
     await callback.message.edit_text(
         t('notifications_text', status=status),
         reply_markup=get_notifications_keyboard(t)
@@ -60,7 +65,9 @@ async def notifications_settings_callback(callback: CallbackQuery, t):
 
 
 @router.callback_query(F.data == 'toggle_notifications')
-async def toggle_notifications_callback(callback: CallbackQuery, t):
+async def toggle_notifications_callback(callback: CallbackQuery, t, state: FSMContext): # Added state
+    await safe_answer_callback(callback)
+    await state.clear() # Added clear state
     tg_id = callback.from_user.id
 
     async with get_session() as session:

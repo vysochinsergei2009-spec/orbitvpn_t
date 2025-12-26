@@ -1,17 +1,19 @@
 from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
+from aiogram.fsm.context import FSMContext # Added
 
 from app.core.keyboards import main_kb, get_referral_keyboard
 from app.db.db import get_session
 from config import FREE_TRIAL_DAYS
-from .utils import safe_answer_callback, get_repositories, extract_referrer_id
+from ..utils import safe_answer_callback, get_repositories, extract_referrer_id
 
 router = Router()
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, t):
+async def cmd_start(message: Message, t, state: FSMContext): # Added state
+    await state.clear() # Added clear state
     tg_id = message.from_user.id
     username = message.from_user.username or f"unknown_{tg_id}"
     referrer_id = extract_referrer_id(message.text)
@@ -34,8 +36,9 @@ async def cmd_start(message: Message, t):
 
 
 @router.callback_query(F.data == 'back_main')
-async def back_to_main(callback: CallbackQuery, t):
+async def back_to_main(callback: CallbackQuery, t, state: FSMContext): # Added state
     await safe_answer_callback(callback)
+    await state.clear() # Added clear state
     tg_id = callback.from_user.id
     await callback.message.edit_text(t('welcome'), reply_markup=main_kb(t, user_id=tg_id))
 

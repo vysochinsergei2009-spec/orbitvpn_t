@@ -5,7 +5,7 @@ from app.core.keyboards import sub_kb, myvpn_kb
 from app.db.db import get_session
 from app.utils.logging import get_logger
 from config import PLANS
-from .utils import safe_answer_callback, get_repositories, get_user_balance, format_expire_date
+from ..utils import safe_answer_callback, get_repositories, get_user_balance, format_expire_date
 
 router = Router()
 LOG = get_logger(__name__)

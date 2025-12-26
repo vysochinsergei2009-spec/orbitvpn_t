@@ -8,8 +8,11 @@ from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, ContentType,
 from sqlalchemy.exc import OperationalError, TimeoutError as SQLTimeoutError
 
 from app.core.keyboards import (
-    balance_kb, get_payment_methods_keyboard, get_payment_amounts_keyboard,
-    back_balance, payment_success_actions
+    balance_kb,
+    get_payment_methods_keyboard,
+    get_payment_amounts_keyboard,
+    back_balance,
+    payment_success_actions
 )
 from app.db.db import get_session
 from app.payments.manager import PaymentManager
@@ -17,7 +20,7 @@ from app.payments.models import PaymentMethod
 from app.utils.logging import get_logger
 from app.utils.redis import get_redis
 from config import TELEGRAM_STARS_RATE, PLANS, bot, MIN_PAYMENT_AMOUNT, MAX_PAYMENT_AMOUNT
-from .utils import safe_answer_callback, get_repositories, get_user_balance, format_expire_date
+from ..utils import safe_answer_callback, get_repositories, get_user_balance, format_expire_date
 
 router = Router()
 LOG = get_logger(__name__)
@@ -313,7 +316,7 @@ async def successful_payment(message: Message, t):
 
     async with get_session() as session:
         try:
-            from app.repo.models import Payment as PaymentModel, User
+            from app.db.models import Payment as PaymentModel, User
             from sqlalchemy import select
 
             # CRITICAL FIX: Acquire database lock FIRST to prevent race conditions
